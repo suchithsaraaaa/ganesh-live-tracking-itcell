@@ -1,5 +1,6 @@
 from django.urls import path
+from .views import PoliceStationListView
 
 urlpatterns = [
-    # Endpoints implemented in Phase 10
+    path('police-stations/', PoliceStationListView.as_view(), name='geography-police-stations'),
 ]

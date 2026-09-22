@@ -204,3 +204,4 @@ test-output/
 # 12. IDE & LOCAL TOOL GENERATED FILES
 # ------------------------------------------------------------------------------
 scratch/
+.claude/

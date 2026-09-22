@@ -406,6 +406,26 @@ class LatestLocationView(APIView):
                 'police_id': c.police_id
             }
 
+        return Response({
+            'gpid': idol.gpid,
+            'name': idol.name,
+            'police_station': idol.police_station,
+            'zone': idol.zone,
+            'procession_state': idol.procession_state,
+            'connection_state': connection_state,
+            'active_session_id': active_session.id if active_session else None,
+            'constable': assigned_constable,
+            'latest_location': {
+                'latitude': latest_point.latitude,
+                'longitude': latest_point.longitude,
+                'accuracy': latest_point.accuracy,
+                'speed': latest_point.speed,
+                'heading': latest_point.heading,
+                'recorded_at': latest_point.recorded_at.isoformat(),
+            } if latest_point else None
+        })
+
+
 class MobileSessionView(APIView):
     """
     Direct endpoint for Android APK (live_tracking_service.dart):

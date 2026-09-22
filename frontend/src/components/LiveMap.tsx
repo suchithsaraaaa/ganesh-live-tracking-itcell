@@ -11,18 +11,18 @@ interface LiveMapProps {
   journeyTrail: JourneyBreadcrumb[] | null;
 }
 
-// Color map for Procession States
+// Color map for Procession States (matches the Figma warm-dark operational palette)
 const STATE_COLORS: Record<ProcessionState, string> = {
-  NOT_STARTED: '#64748b',
-  TRACKING: '#3b82f6',
-  MOVING: '#10b981',
-  HOLDING: '#f59e0b',
-  AT_VISARJAN: '#8b5cf6',
-  IMMERSION_COMPLETED: '#475569',
+  NOT_STARTED: '#7A766E',
+  TRACKING: '#5E88A8',
+  MOVING: '#5FA776',
+  HOLDING: '#D9A93B',
+  AT_VISARJAN: '#C9A24A',
+  IMMERSION_COMPLETED: '#7A766E',
 };
 
 function createMarkerIcon(state: ProcessionState, isSelected: boolean = false): L.DivIcon {
-  const color = STATE_COLORS[state] || '#3b82f6';
+  const color = STATE_COLORS[state] || '#5E88A8';
   const size = isSelected ? 36 : 28;
   const pulse = state === 'MOVING' ? '<span class="absolute -inset-1 rounded-full bg-emerald-400 opacity-40 animate-ping"></span>' : '';
 
@@ -31,7 +31,7 @@ function createMarkerIcon(state: ProcessionState, isSelected: boolean = false): 
     html: `
       <div class="relative flex items-center justify-center" style="width: ${size}px; height: ${size}px;">
         ${pulse}
-        <div style="background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${isSelected ? '3px solid #ffffff' : '2px solid #0f172a'}; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);">
+        <div style="background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${isSelected ? '3px solid #F2EFE9' : '2px solid #0B0B0A'}; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);">
           <svg style="width: ${size * 0.5}px; height: ${size * 0.5}px; color: white;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path>
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
@@ -49,8 +49,8 @@ function createHistoricalIcon(): L.DivIcon {
   return L.divIcon({
     className: 'historical-marker',
     html: `
-      <div style="background-color: #ef4444; width: 32px; height: 32px; border-radius: 50%; border: 3px solid #ffffff; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 8px rgba(0,0,0,0.5);">
-        <span style="color: white; font-weight: bold; font-size: 11px;">HIST</span>
+      <div style="background-color: #D9524A; width: 32px; height: 32px; border-radius: 50%; border: 3px solid #F2EFE9; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+        <span style="color: #0B0B0A; font-weight: 700; font-size: 10px;">HIST</span>
       </div>
     `,
     iconSize: [32, 32],
@@ -83,11 +83,23 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       zoomControl: false,
     });
 
-    // Clean Dark Map Tiles (CartoDB Dark Matter)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; OpenStreetMap',
-      subdomains: 'abcd',
+    // Dark basemap tiles. Configurable via VITE_MAP_TILE_URL / VITE_MAP_TILE_ATTRIBUTION
+    // (see .env.example) so the tile provider can be swapped without a code change.
+    // Defaults to Esri's keyless "World Dark Gray" canvas — CartoDB's dark_all tiles
+    // now gate real browser (Origin-checked) requests behind an API key even though
+    // server-side/curl requests succeed, which is why they showed "API KEY REQUIRED".
+    const tileUrl = import.meta.env.VITE_MAP_TILE_URL
+      || 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+    const tileAttribution = import.meta.env.VITE_MAP_TILE_ATTRIBUTION
+      || 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ';
+
+    L.tileLayer(tileUrl, {
+      attribution: tileAttribution,
       maxZoom: 19,
+      // Esri's free World Dark Gray canvas only has native tiles up to ~16 in most
+      // areas; without this Leaflet requests non-existent deep-zoom tiles (seen as
+      // "Map data not available") instead of upscaling the last real tile.
+      maxNativeZoom: 16,
     }).addTo(map);
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -126,24 +138,24 @@ export const LiveMap: React.FC<LiveMapProps> = ({
 
       // Build Marker Popup
       const popupHtml = `
-        <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4;">
-          <div style="font-size: 13px; font-weight: bold; color: #60a5fa; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">
+        <div style="font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.4;">
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: #D9793B; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; margin-bottom: 6px;">
             GPID: ${m.gpid}
           </div>
-          <div style="font-weight: 600; color: #f1f5f9; margin-bottom: 2px;">
+          <div style="font-weight: 600; color: #F2EFE9; margin-bottom: 2px;">
             ${m.idol_name}
           </div>
-          <div style="color: #94a3b8; margin-bottom: 6px;">
+          <div style="color: #9C9890; margin-bottom: 6px;">
             ${m.association_name || 'Individual Mandap'}
           </div>
-          <div style="display: grid; grid-template-columns: auto auto; gap: 4px; color: #cbd5e1; font-size: 11px;">
-            <span style="color: #94a3b8;">Zone:</span> <span>${m.zone}</span>
-            <span style="color: #94a3b8;">Police Station:</span> <span>${m.police_station} (${m.ps_code})</span>
-            <span style="color: #94a3b8;">Constable:</span> <span>${m.assigned_constable?.name || 'Unassigned'}</span>
-            <span style="color: #94a3b8;">Status:</span> <span style="font-weight: bold; color: ${STATE_COLORS[m.procession_state]};">${m.procession_state}</span>
-            <span style="color: #94a3b8;">Freshness:</span> <span style="font-weight: bold;">${m.connection_state}</span>
+          <div style="display: grid; grid-template-columns: auto auto; gap: 4px; color: #C7C4BC; font-size: 11px;">
+            <span style="color: #9C9890;">Zone:</span> <span>${m.zone}</span>
+            <span style="color: #9C9890;">Police Station:</span> <span>${m.police_station} (${m.ps_code})</span>
+            <span style="color: #9C9890;">Constable:</span> <span>${m.assigned_constable?.name || 'Unassigned'}</span>
+            <span style="color: #9C9890;">Status:</span> <span style="font-weight: 600; color: ${STATE_COLORS[m.procession_state]};">${m.procession_state}</span>
+            <span style="color: #9C9890;">Freshness:</span> <span style="font-weight: 600;">${m.connection_state}</span>
           </div>
-          <div style="margin-top: 6px; font-size: 10px; color: #64748b; text-align: right;">
+          <div style="margin-top: 6px; font-size: 10px; color: #6B675F; text-align: right;">
             GPS: ${new Date(m.last_gps_timestamp).toLocaleTimeString()}
           </div>
         </div>
@@ -204,12 +216,12 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       }).addTo(map);
 
       const histPopupHtml = `
-        <div style="font-family: sans-serif; font-size: 12px;">
-          <div style="font-weight: bold; color: #f87171; margin-bottom: 4px;">HISTORICAL GPS POINT</div>
-          <div><b>GPID:</b> ${historicalLookup.gpid}</div>
-          <div><b>Recorded:</b> ${new Date(np.recorded_at).toLocaleString()}</div>
-          <div><b>Time Delta:</b> ${np.time_difference_seconds}s from query</div>
-          <div><b>Officer on Duty:</b> ${historicalLookup.constable.name} (${historicalLookup.constable.police_id})</div>
+        <div style="font-family: 'Inter', sans-serif; font-size: 12px; color: #C7C4BC;">
+          <div style="font-weight: 600; color: #D9524A; margin-bottom: 4px;">HISTORICAL GPS POINT</div>
+          <div><b style="color:#F2EFE9;">GPID:</b> ${historicalLookup.gpid}</div>
+          <div><b style="color:#F2EFE9;">Recorded:</b> ${new Date(np.recorded_at).toLocaleString()}</div>
+          <div><b style="color:#F2EFE9;">Time Delta:</b> ${np.time_difference_seconds}s from query</div>
+          <div><b style="color:#F2EFE9;">Officer on Duty:</b> ${historicalLookup.constable.name} (${historicalLookup.constable.police_id})</div>
         </div>
       `;
       marker.bindPopup(histPopupHtml).openPopup();
@@ -224,28 +236,28 @@ export const LiveMap: React.FC<LiveMapProps> = ({
 
       {/* Floating Single-Selection Banner */}
       {selectedMarker && (
-        <div className="absolute top-3 left-3 z-[1000] bg-slate-900/95 border border-blue-500/50 rounded-lg p-3 shadow-xl backdrop-blur max-w-sm flex items-start justify-between">
+        <div className="absolute top-3 left-3 z-[1000] bg-elevated/95 border border-accent/40 rounded-lg p-3 shadow-xl backdrop-blur max-w-sm flex items-start justify-between">
           <div>
-            <div className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-accent">
               Isolated Tracking Mode
             </div>
-            <div className="text-sm font-bold text-white mono">
+            <div className="text-sm font-semibold text-text-primary mono">
               GPID: {selectedMarker.gpid}
             </div>
-            <div className="text-xs text-slate-300 truncate">
+            <div className="text-xs text-text-secondary truncate">
               {selectedMarker.idol_name} &bull; {selectedMarker.police_station}
             </div>
-            <div className="text-[11px] text-slate-400 mt-1">
+            <div className="text-[11px] text-text-tertiary mt-1">
               Status: <span style={{ color: STATE_COLORS[selectedMarker.procession_state] }} className="font-semibold">{selectedMarker.procession_state}</span>
-              &nbsp;&bull;&nbsp; Freshness: <span className="font-semibold">{selectedMarker.connection_state}</span>
+              &nbsp;&bull;&nbsp; Freshness: <span className="font-semibold text-text-secondary">{selectedMarker.connection_state}</span>
             </div>
           </div>
           <button
             onClick={onClearSelection}
-            className="ml-3 p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+            className="ml-3 p-1.5 rounded bg-elevated-2 hover:bg-border-default/50 text-text-secondary hover:text-text-primary transition-colors"
             title="Restore all markers"
           >
-            <span className="text-xs font-semibold px-1">Restore Map</span>
+            <span className="text-[11px] font-medium px-1">Restore Map</span>
           </button>
         </div>
       )}

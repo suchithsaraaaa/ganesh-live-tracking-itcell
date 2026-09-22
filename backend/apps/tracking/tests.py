@@ -140,6 +140,31 @@ class TrackingAPITests(TestCase):
         self.assertEqual(res.data['total_points'], 2)
         self.assertGreater(res.data['summary']['max_speed_kmh'], 10.0)
 
+    def test_latest_location_endpoint_returns_200_and_payload(self):
+        session = TrackingSession.objects.create(
+            assignment=self.assignment,
+            status=TrackingSessionStatus.ACTIVE
+        )
+        t = timezone.now()
+        LocationPoint.objects.create(
+            session=session,
+            latitude=17.3616,
+            longitude=78.4747,
+            accuracy=5.0,
+            speed=12.5,
+            heading=180.0,
+            recorded_at=t
+        )
+        res = self.client.get(reverse('tracking-latest', kwargs={'gpid': self.idol.gpid}))
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['gpid'], self.idol.gpid)
+        self.assertEqual(res.data['connection_state'], 'LIVE')
+        self.assertEqual(res.data['active_session_id'], session.id)
+        self.assertIsNotNone(res.data['latest_location'])
+        self.assertEqual(res.data['latest_location']['latitude'], 17.3616)
+        self.assertEqual(res.data['latest_location']['longitude'], 78.4747)
+        self.assertEqual(res.data['constable']['police_id'], 'PC-999')
+
 
 class AndroidAPKIntegrationTests(TestCase):
     def setUp(self):

@@ -32,6 +32,28 @@ class IsConstable(permissions.BasePermission):
         return request.user.is_authenticated and request.user.role == UserRole.CONSTABLE
 
 
+class CanManageUsers(permissions.BasePermission):
+    """
+    Restricted to MAIN_OFFICER or users explicitly granted manage_users capability.
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        return request.user.role == UserRole.MAIN_OFFICER or request.user.has_capability('manage_users')
+
+
+class CanAssignFieldOfficers(permissions.BasePermission):
+    """
+    Restricted to station officers or above, or users with assign_field_officers capability.
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        if request.user.role in [UserRole.MAIN_OFFICER, UserRole.ACP, UserRole.SHO]:
+            return True
+        return request.user.has_capability('assign_field_officers')
+
+
 def filter_by_jurisdiction(queryset, user, ps_field='police_station', zone_field='zone', division_field='division'):
     """
     Enforces server-side jurisdiction filter on querysets.

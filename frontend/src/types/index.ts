@@ -13,12 +13,44 @@ export type ConnectionState = 'LIVE' | 'DEGRADED' | 'OFFLINE';
 export interface User {
   id: number;
   username: string;
+  name?: string;
+  first_name?: string;
+  last_name?: string;
   role: UserRole;
   police_id: string;
   zone: string;
   division: string;
   police_station: string;
+  is_active?: boolean;
   must_change_password: boolean;
+  permissions?: string[];
+  custom_permissions?: string[];
+  date_joined?: string;
+}
+
+export interface AssignableOfficer {
+  id: number;
+  name: string;
+  username: string;
+  police_id: string;
+  role: UserRole;
+  police_station: string;
+  is_active: boolean;
+  currently_assigned: boolean;
+  assigned_gpid: string | null;
+}
+
+export interface PoliceStationMaster {
+  id: number;
+  ps_name: string;
+  ps_code: string;
+  name?: string;
+  code?: string;
+  zone: string;
+  division: string;
+  first_unique_id?: string;
+  starting_gpid_number?: number | null;
+  has_boundary_polygon?: boolean;
 }
 
 export interface Idol {
@@ -136,4 +168,23 @@ export interface JourneyData {
     max_speed_kmh: number;
   };
   points: JourneyBreadcrumb[];
+}
+
+export interface Assignment {
+  id: number;
+  idol: number;
+  idol_gpid: string;
+  idol_name: string;
+  police_station: string;
+  constable: number;
+  constable_name: string;
+  constable_username: string;
+  constable_police_id: string;
+  assigned_by: number | null;
+  started_at: string;
+  ended_at: string | null;
+  is_active: boolean;
+  handover_reason: string;
+  handover_to: number | null;
+  created_at: string;
 }

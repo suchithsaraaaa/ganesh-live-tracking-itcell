@@ -1,16 +1,76 @@
-import { Idol, DashboardKPIs, ActiveMarker, TimestampLookupResult, JourneyData, User } from '../types';
+import { Idol, DashboardKPIs, ActiveMarker, TimestampLookupResult, JourneyData, User, Assignment } from '../types';
 
 const API_BASE = '/api/v1';
 
+function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/**
+ * Wraps fetch() with the session-cookie + CSRF conventions the Django backend expects:
+ * same-origin credentials on every call, and an X-CSRFToken header on unsafe methods
+ * whenever the browser holds a csrftoken cookie.
+ */
+async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  const method = (options.method || 'GET').toUpperCase();
+  const headers = new Headers(options.headers);
+
+  if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)) {
+    const csrfToken = getCookie('csrftoken');
+    if (csrfToken) headers.set('X-CSRFToken', csrfToken);
+  }
+
+  return fetch(`${API_BASE}${path}`, {
+    ...options,
+    method,
+    headers,
+    credentials: 'same-origin',
+  });
+}
+
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Authentication
+// ---------------------------------------------------------------------------
+
+export async function login(username: string, password: string): Promise<User> {
+  const res = await apiFetch('/auth/login/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new ApiError(data.error || 'Invalid credentials.', res.status);
+  }
+  return data;
+}
+
+export async function logout(): Promise<void> {
+  await apiFetch('/auth/logout/', { method: 'POST' });
+}
+
 export async function fetchCurrentUser(): Promise<User | null> {
   try {
-    const res = await fetch(`${API_BASE}/auth/me/`);
+    const res = await apiFetch('/auth/me/');
     if (!res.ok) return null;
     return await res.json();
   } catch {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Dashboard & Idols
+// ---------------------------------------------------------------------------
 
 export async function fetchDashboardData(filters?: { zone?: string; police_station?: string }): Promise<{
   kpis: DashboardKPIs;
@@ -21,8 +81,8 @@ export async function fetchDashboardData(filters?: { zone?: string; police_stati
   if (filters?.zone) params.append('zone', filters.zone);
   if (filters?.police_station) params.append('police_station', filters.police_station);
 
-  const res = await fetch(`${API_BASE}/idols/dashboard/?${params.toString()}`);
-  if (!res.ok) throw new Error('Failed to load dashboard metrics');
+  const res = await apiFetch(`/idols/dashboard/?${params.toString()}`);
+  if (!res.ok) throw new ApiError('Failed to load dashboard metrics', res.status);
   return await res.json();
 }
 
@@ -40,53 +100,169 @@ export async function fetchIdols(params?: {
   if (params?.procession_state) query.append('procession_state', params.procession_state);
   if (params?.page) query.append('page', params.page.toString());
 
-  const res = await fetch(`${API_BASE}/idols/?${query.toString()}`);
-  if (!res.ok) throw new Error('Failed to load idols list');
+  const res = await apiFetch(`/idols/?${query.toString()}`);
+  if (!res.ok) throw new ApiError('Failed to load idols list', res.status);
   return await res.json();
 }
 
 export async function fetchIdolDetail(lookup: string): Promise<Idol> {
-  const res = await fetch(`${API_BASE}/idols/${lookup}/`);
-  if (!res.ok) throw new Error(`Idol with GPID ${lookup} not found`);
+  const res = await apiFetch(`/idols/${lookup}/`);
+  if (!res.ok) throw new ApiError(`Idol with GPID ${lookup} not found`, res.status);
   return await res.json();
 }
 
+// ---------------------------------------------------------------------------
+// Tracking / Journey
+// ---------------------------------------------------------------------------
+
 export async function fetchTimestampLookup(gpid: string, isoTimestamp: string): Promise<TimestampLookupResult> {
   const params = new URLSearchParams({ timestamp: isoTimestamp });
-  const res = await fetch(`${API_BASE}/tracking/idols/${gpid}/location-at/?${params.toString()}`);
+  const res = await apiFetch(`/tracking/idols/${gpid}/location-at/?${params.toString()}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.message || err.error || 'No location point recorded for this timestamp.');
+    throw new ApiError(err.message || err.error || 'No location point recorded for this timestamp.', res.status);
   }
   return await res.json();
 }
 
 export async function fetchJourney(gpid: string): Promise<JourneyData> {
-  const res = await fetch(`${API_BASE}/tracking/idols/${gpid}/journey/`);
-  if (!res.ok) throw new Error('Failed to fetch journey trail');
+  const res = await apiFetch(`/tracking/idols/${gpid}/journey/`);
+  if (!res.ok) throw new ApiError('Failed to fetch journey trail', res.status);
   return await res.json();
 }
+
+// ---------------------------------------------------------------------------
+// Reports
+// ---------------------------------------------------------------------------
 
 export function getReportDownloadUrl(gpid: string): string {
   return `${API_BASE}/reports/idols/${gpid}/`;
 }
 
-export async function assignConstable(gpid: string, constableId: number): Promise<any> {
-  const res = await fetch(`${API_BASE}/assignments/create/`, {
+// ---------------------------------------------------------------------------
+// Assignments
+// ---------------------------------------------------------------------------
+
+export async function fetchAssignments(page?: number): Promise<{ count: number; next: string | null; previous: string | null; results: Assignment[] }> {
+  const query = new URLSearchParams();
+  if (page) query.append('page', page.toString());
+  const res = await apiFetch(`/assignments/?${query.toString()}`);
+  if (!res.ok) throw new ApiError('Failed to load assignments', res.status);
+  return await res.json();
+}
+
+export async function assignConstable(gpid: string, constableId: number): Promise<Assignment> {
+  const res = await apiFetch('/assignments/create/', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gpid, constable_id: constableId }),
   });
-  if (!res.ok) throw new Error('Failed to assign constable');
-  return await res.json();
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.error || summarizeFieldErrors(data) || 'Failed to assign constable', res.status);
+  return data;
 }
 
 export async function handoverAssignment(assignmentId: number, newConstableId: number, reason: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/assignments/${assignmentId}/handover/`, {
+  const res = await apiFetch(`/assignments/${assignmentId}/handover/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ new_constable_id: newConstableId, reason }),
   });
-  if (!res.ok) throw new Error('Failed to handover duty');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.error || summarizeFieldErrors(data) || 'Failed to handover duty', res.status);
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// User Management (Administrative)
+// ---------------------------------------------------------------------------
+
+export async function fetchUsers(params?: {
+  search?: string;
+  role?: string;
+  is_active?: boolean;
+  police_station?: string;
+}): Promise<{ count: number; results: User[] }> {
+  const query = new URLSearchParams();
+  if (params?.search) query.append('search', params.search);
+  if (params?.role) query.append('role', params.role);
+  if (params?.is_active !== undefined) query.append('is_active', String(params.is_active));
+  if (params?.police_station) query.append('police_station', params.police_station);
+
+  const res = await apiFetch(`/auth/users/?${query.toString()}`);
+  if (!res.ok) throw new ApiError('Failed to load user accounts', res.status);
   return await res.json();
+}
+
+export async function createUser(userData: Partial<User> & { password?: string }): Promise<User> {
+  const res = await apiFetch('/auth/users/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(userData),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.error || summarizeFieldErrors(data) || 'Failed to create user', res.status);
+  return data;
+}
+
+export async function updateUser(id: number, userData: Partial<User> & { password?: string }): Promise<User> {
+  const res = await apiFetch(`/auth/users/${id}/`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(userData),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.error || summarizeFieldErrors(data) || 'Failed to update user', res.status);
+  return data;
+}
+
+export async function toggleUserActive(id: number): Promise<{ id: number; username: string; is_active: boolean; message: string }> {
+  const res = await apiFetch(`/auth/users/${id}/toggle-active/`, {
+    method: 'POST',
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.error || 'Failed to toggle user status', res.status);
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Field Officers Directory
+// ---------------------------------------------------------------------------
+
+export async function fetchAssignableOfficers(policeStation?: string): Promise<{ count: number; results: import('../types').AssignableOfficer[] }> {
+  const query = new URLSearchParams();
+  if (policeStation) query.append('police_station', policeStation);
+
+  const res = await apiFetch(`/auth/officers/?${query.toString()}`);
+  if (!res.ok) throw new ApiError('Failed to load assignable field officers', res.status);
+  return await res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Authoritative Geography
+// ---------------------------------------------------------------------------
+
+export async function fetchAuthoritativePoliceStations(): Promise<{ count: number; results: import('../types').PoliceStationMaster[] }> {
+  const res = await apiFetch('/geography/police-stations/');
+  if (!res.ok) throw new ApiError('Failed to load authoritative police stations', res.status);
+  return await res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Latest Location
+// ---------------------------------------------------------------------------
+
+export async function fetchLatestLocation(gpid: string): Promise<any> {
+  const res = await apiFetch(`/tracking/idols/${gpid}/latest/`);
+  if (!res.ok) throw new ApiError(`Failed to load latest location for ${gpid}`, res.status);
+  return await res.json();
+}
+
+function summarizeFieldErrors(data: any): string | null {
+  if (!data || typeof data !== 'object') return null;
+  const parts: string[] = [];
+  for (const [field, val] of Object.entries(data)) {
+    if (Array.isArray(val)) parts.push(`${field}: ${val.join(', ')}`);
+  }
+  return parts.length > 0 ? parts.join(' | ') : null;
 }

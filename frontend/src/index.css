@@ -1,93 +1,190 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import 'tailwindcss';
 
-:root {
-  --bg-primary: #0b1120;
-  --bg-card: #131c31;
-  --bg-card-hover: #1e293b;
-  --border-color: #1e2e4a;
-  --accent-blue: #2563eb;
-  --accent-gold: #d97706;
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+@theme {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
-  --status-moving: #10b981;
-  --status-holding: #f59e0b;
-  --status-tracking: #3b82f6;
-  --status-visarjan: #8b5cf6;
-  --status-done: #64748b;
-  --status-live: #059669;
-  --status-degraded: #d97706;
-  --status-offline: #ef4444;
-}
+  /* Surfaces */
+  --color-base: #0b0b0a;
+  --color-elevated: #141412;
+  --color-elevated-2: #1b1b18;
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+  /* Borders */
+  --color-border-subtle: rgb(255 255 255 / 0.08);
+  --color-border-default: rgb(255 255 255 / 0.14);
 
-body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
-  height: 100vh;
-  width: 100vw;
-  overflow: hidden;
-}
+  /* Text */
+  --color-text-primary: #f2efe9;
+  --color-text-secondary: #9c9890;
+  --color-text-tertiary: #6b675f;
 
-/* Custom Scrollbars */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: #0f172a;
-}
-::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  /* Accent (Ganesh Chaturthi gold/amber) */
+  --color-accent: #d9793b;
+  --color-accent-hover: #e9975e;
+  --color-accent-soft: rgb(217 121 59 / 0.14);
+
+  /* Semantic operational states */
+  --color-status-active: #5fa776;
+  --color-status-active-soft: rgb(95 167 118 / 0.14);
+  --color-status-warning: #d9a93b;
+  --color-status-warning-soft: rgb(217 169 59 / 0.14);
+  --color-status-critical: #d9524a;
+  --color-status-critical-soft: rgb(217 82 74 / 0.14);
+  --color-status-tracking: #5e88a8;
+  --color-status-tracking-soft: rgb(94 136 168 / 0.14);
+  --color-status-visarjan: #c9a24a;
+  --color-status-visarjan-soft: rgb(201 162 74 / 0.14);
+  --color-status-neutral: #7a766e;
+  --color-status-neutral-soft: rgb(122 118 110 / 0.14);
+
+  /* Glass surfaces */
+  --color-glass-surface: rgb(22 23 21 / 0.65);
+  --color-glass-border: rgb(255 255 255 / 0.08);
 }
 
-/* Leaflet Dark Map Overrides */
-.leaflet-container {
-  width: 100%;
-  height: 100%;
-  background: #0f172a !important;
-}
+/*
+  Tailwind v4 wraps its utilities in cascade layers (theme, base, components, utilities).
+  Any unlayered CSS beats ALL layered CSS regardless of specificity, so these base
+  element rules must live in @layer base or they would silently defeat every utility
+  class (e.g. padding/margin utilities) sharing a property with them.
+*/
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 
-.leaflet-popup-content-wrapper {
-  background: #1e293b !important;
-  color: #f8fafc !important;
-  border-radius: 6px !important;
-  border: 1px solid #334155 !important;
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5) !important;
-  padding: 0 !important;
-}
+  html,
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--color-base);
+    color: var(--color-text-primary);
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+  }
 
-.leaflet-popup-content {
-  margin: 0 !important;
-  padding: 12px !important;
-}
+  /* Custom Scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-base);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-elevated-2);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-border-default);
+  }
 
-.leaflet-popup-tip {
-  background: #1e293b !important;
-}
+  /* Leaflet Dark Map Overrides */
+  .leaflet-container {
+    width: 100%;
+    height: 100%;
+    background: var(--color-elevated) !important;
+    font-family: var(--font-sans) !important;
+  }
 
-/* Pulse animation for live indicators */
-@keyframes pulse-live {
-  0% { transform: scale(0.95); opacity: 0.8; }
-  50% { transform: scale(1.15); opacity: 1; }
-  100% { transform: scale(0.95); opacity: 0.8; }
-}
+  .leaflet-popup-content-wrapper {
+    background: var(--color-elevated-2) !important;
+    color: var(--color-text-primary) !important;
+    border-radius: 6px !important;
+    border: 1px solid var(--color-border-default) !important;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5) !important;
+    padding: 0 !important;
+  }
 
-.live-pulse {
-  animation: pulse-live 2s infinite ease-in-out;
-}
+  .leaflet-popup-content {
+    margin: 0 !important;
+    padding: 12px !important;
+  }
 
-.mono {
-  font-family: 'JetBrains Mono', monospace;
+  .leaflet-popup-tip {
+    background: var(--color-elevated-2) !important;
+  }
+
+  .leaflet-control-zoom a {
+    background: var(--color-elevated-2) !important;
+    color: var(--color-text-secondary) !important;
+    border-color: var(--color-border-default) !important;
+  }
+  .leaflet-control-zoom a:hover {
+    color: var(--color-text-primary) !important;
+  }
+
+  .leaflet-control-attribution {
+    background: rgb(11 11 10 / 0.7) !important;
+    color: var(--color-text-tertiary) !important;
+  }
+  .leaflet-control-attribution a {
+    color: var(--color-text-secondary) !important;
+  }
+
+  /* Pulse animation for live indicators */
+  @keyframes pulse-live {
+    0% {
+      transform: scale(0.95);
+      opacity: 0.8;
+    }
+    50% {
+      transform: scale(1.15);
+      opacity: 1;
+    }
+    100% {
+      transform: scale(0.95);
+      opacity: 0.8;
+    }
+  }
+
+  .live-pulse {
+    animation: pulse-live 2s infinite ease-in-out;
+  }
+
+  .mono {
+    font-family: var(--font-mono);
+  }
+
+  /* Glass system — used sparingly (sidebar, header, drawers, modals, dropdowns),
+     never on the map itself, per the "restrained glassmorphism" visual direction. */
+  .glass {
+    background-color: var(--color-glass-surface);
+    border-color: var(--color-glass-border);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { transform: scale(0.85); opacity: 0.5; }
+    50% { transform: scale(1.15); opacity: 1; }
+  }
+
+  @keyframes fade-in-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes scale-in {
+    from { opacity: 0; transform: scale(0.98); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  @keyframes slide-in-right {
+    from { opacity: 0; transform: translateX(16px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  .animate-fade-in-up {
+    animation: fade-in-up 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .animate-scale-in {
+    animation: scale-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .animate-slide-in-right {
+    animation: slide-in-right 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
 }
