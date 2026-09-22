@@ -25,6 +25,83 @@ def is_within_hyderabad_bounds(lat: float, lon: float) -> bool:
     )
 
 
+PS_NAME_NORMALIZATION: Dict[str, str] = {
+    'hussainialam': 'Hussaini Alam',
+    'sanathnagar': 'Sanath Nagar',
+    'begumbazar': 'Begum Bazar',
+    'sultanbazar': 'Sultan Bazar',
+    'habeebnagar': 'Habib Nagar',
+    'mirchowk': 'Mir Chowk',
+    'tappachabutra': 'Tappa Chabutra',
+    'gandhinagar': 'Gandhi Nagar',
+    'asifnagar': 'Asif Nagar',
+    'santoshnagar': 'Santosh Nagar',
+    'shahalibanda': 'Shah Ali Banda',
+    'ou sity': 'Osmania University',
+    'medipatnam': 'Mehdipatnam',
+    'rein bazar': 'Rain Bazar',
+    'lake': 'Hussain Sagar',
+    'sr nagar': 'Sanjeeva Reddy Nagar',
+    'is sadan': 'IS Sadan',
+    'chatrinaka': 'Chatrinaka',
+    'chilkalguda': 'Chilkalguda',
+    'kulsumpura': 'Kulsumpura',
+    'goshamahal': 'Goshamahal',
+    'afzalgunj': 'Afzal Gunj',
+    'amberpet': 'Amberpet',
+    'moghalpura': 'Moghalpura',
+    'chikkadpally': 'Chikkadpally',
+    'kachiguda': 'Kacheguda',
+    'musheerabad': 'Musheerabad',
+    'saidabad': 'Saidabad',
+    'langer house': 'Langer Houz',
+    'kamatipura': 'Kamatipura',
+    'warasiguda': 'Warasiguda',
+    'malakpet': 'Malakpet',
+    'narayanaguda': 'Narayanaguda',
+    'domalguda': 'Domalguda',
+    'rajendranagar': 'Rajendranagar',
+    'attapur': 'Attapur',
+    'borabanda': 'Borabanda',
+    'film nagar': 'Film Nagar',
+    'panjagutta': 'Panjagutta',
+    'meerpet': 'Meerpet',
+    'lalaguda': 'Lalaguda',
+    'mailardevpally': 'Mailardevpally',
+    'pahadishareef': 'Pahadi Shareef',
+    'nallakunta': 'Nallakunta',
+    'golconda': 'Golconda',
+    'abids': 'Abids',
+    'saifabad': 'Saifabad',
+    'chaderghat': 'Chaderghat',
+    'mangalhat': 'Mangalhat',
+    'chandrayangutta': 'Chandrayangutta',
+    'falaknuma': 'Falaknuma',
+    'adibatla': 'Adibatla',
+    'gudimalkapur': 'Gudimalkapur',
+    'banjara hills': 'Banjara Hills',
+    'masab tank': 'Masab Tank',
+    'madhura nagar': 'Madhura Nagar',
+    'khairatabad': 'Khairatabad',
+    'nampally': 'Nampally',
+    'mahankali': 'Mahankali Secunderabad',
+    'ramgopalpet': 'Ramgopalpet',
+    'charminar': 'Charminar',
+    'madannapet': 'Madannapet',
+    'bandlaguda': 'Bandlaguda',
+    'balapur': 'Balapur',
+    'bhavani nagar': 'Bhavani Nagar',
+    'tolichowki': 'Tolichowki',
+}
+
+
+def normalize_police_station(ps: str) -> str:
+    if not ps:
+        return ""
+    clean = ps.strip().lower()
+    return PS_NAME_NORMALIZATION.get(clean, ps.strip())
+
+
 def sanitize_address_for_geocoding(text: str) -> str:
     """
     Strips noise, plot/house numbers like '21-4-330/1' or 'H.No: 12-3',
@@ -32,8 +109,10 @@ def sanitize_address_for_geocoding(text: str) -> str:
     """
     if not text:
         return ""
+    # Strip landmark prepositions like 'opp to ...', 'opposite ...', 'near ...', 'beside ...'
+    cleaned = re.sub(r'\b(opp(\.?|osite)|near|beside|behind|adj(\.?|acent))\s+(to\s+)?[^,]+', '', text, flags=re.IGNORECASE)
     # Remove house number prefixes like '21-4-330/1', '12-3-45', 'H.No 12'
-    cleaned = re.sub(r'\b\d{1,4}[-/]\d{1,4}[-/]?\d{0,4}[A-Za-z0-9/]*\b', '', text)
+    cleaned = re.sub(r'\b\d{1,4}[-/]\d{1,4}[-/]?\d{0,4}[A-Za-z0-9/]*\b', '', cleaned)
     cleaned = re.sub(r'\b(h\.?no|house\s*no|plot\s*no|door\s*no)\b[:\s\d/-]*', '', cleaned, flags=re.IGNORECASE)
     # Remove stray punctuation and extra whitespace
     cleaned = re.sub(r'[,/\\;-]+', ' ', cleaned)
@@ -94,7 +173,6 @@ class MockGeocoder(BaseGeocoder):
     Returns valid coordinates within Hyderabad.
     """
     def geocode_query(self, query: str) -> Optional[Tuple[float, float, str, str]]:
-        # Return deterministic coordinate based on query hash
         q_hash = abs(hash(query))
         lat = 17.3600 + (q_hash % 1000) * 0.0001
         lon = 78.4700 + ((q_hash // 1000) % 1000) * 0.0001
@@ -118,27 +196,39 @@ def geocode_idol(idol: Idol, geocoder: Optional[BaseGeocoder] = None) -> Dict[st
         geocoder = get_geocoder()
 
     # Build sanitized geographic components (STRICTLY NO OWNER, NO MOBILE, NO CONSTABLE)
-    street_clean = sanitize_address_for_geocoding(idol.instal_street or idol.address)
-    ps_clean = idol.police_station.strip() if idol.police_station else ""
-    pin_clean = idol.instal_pin.strip() if idol.instal_pin and len(idol.instal_pin.strip()) == 6 else ""
+    street_clean = sanitize_address_for_geocoding(idol.instal_street)
+    addr_clean = sanitize_address_for_geocoding(idol.address)
+    ps_norm = normalize_police_station(idol.police_station)
+    village_clean = sanitize_address_for_geocoding(idol.instal_village)
 
-    # Strategy 1: Street + Locality + Hyderabad
-    queries = []
+    queries: list[Tuple[str, str, str]] = []
+
+    # Strategy 1: Street + Locality/PS + Hyderabad
     if street_clean and len(street_clean) > 3:
-        if ps_clean and ps_clean.lower() not in street_clean.lower():
-            queries.append((f"{street_clean}, {ps_clean}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "high"))
+        if ps_norm and ps_norm.lower() not in street_clean.lower():
+            queries.append((f"{street_clean}, {ps_norm}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "high"))
         queries.append((f"{street_clean}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "high"))
 
-    # Strategy 2: Address line clean + Hyderabad
-    addr_clean = sanitize_address_for_geocoding(idol.address)
+    # Strategy 2: Clean Address Line + Hyderabad
     if addr_clean and addr_clean != street_clean and len(addr_clean) > 3:
+        if ps_norm and ps_norm.lower() not in addr_clean.lower():
+            queries.append((f"{addr_clean}, {ps_norm}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "medium"))
         queries.append((f"{addr_clean}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "medium"))
 
-    # Strategy 3: Police Station area jurisdiction + Hyderabad (Low confidence / Area)
-    if ps_clean:
-        queries.append((f"{ps_clean}, Hyderabad, Telangana, India", GeocodingStatus.PARTIAL, "locality"))
+    # Strategy 3: Village / Sub-locality if distinct
+    if village_clean and village_clean not in [street_clean, addr_clean] and len(village_clean) > 3:
+        queries.append((f"{village_clean}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "medium"))
 
+    # Strategy 4: Police Station area jurisdiction + Hyderabad (Partial / Area level)
+    if ps_norm:
+        queries.append((f"{ps_norm}, Hyderabad, Telangana, India", GeocodingStatus.PARTIAL, "locality"))
+
+    seen_queries = set()
     for query_str, candidate_status, confidence_label in queries:
+        if query_str in seen_queries:
+            continue
+        seen_queries.add(query_str)
+
         res = geocoder.geocode_query(query_str)
         if res:
             lat, lon, display_name, res_type = res
