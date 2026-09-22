@@ -70,3 +70,86 @@ class RBACAndJurisdictionTests(TestCase):
         res = self.client.get(reverse('idol-list'))
         self.assertEqual(res.status_code, 200)
         self.assertEqual(len(res.data['results']), 0)
+
+
+class ProductionSettingsValidationTests(TestCase):
+    """
+    Tests that config.settings.prod fails fast on missing or insecure environment variables.
+    """
+    def test_missing_secret_key_raises_improperly_configured(self):
+        import os, importlib
+        from unittest.mock import patch
+        from django.core.exceptions import ImproperlyConfigured
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ImproperlyConfigured) as ctx:
+                import config.settings.prod
+                importlib.reload(config.settings.prod)
+            self.assertIn("SECRET_KEY", str(ctx.exception))
+
+    def test_insecure_secret_key_raises_improperly_configured(self):
+        import os, importlib
+        from unittest.mock import patch
+        from django.core.exceptions import ImproperlyConfigured
+        env = {'SECRET_KEY': 'police_secret_key_change_in_production'}
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(ImproperlyConfigured) as ctx:
+                import config.settings.prod
+                importlib.reload(config.settings.prod)
+            self.assertIn("Insecure placeholder SECRET_KEY", str(ctx.exception))
+
+    def test_missing_allowed_hosts_raises_improperly_configured(self):
+        import os, importlib
+        from unittest.mock import patch
+        from django.core.exceptions import ImproperlyConfigured
+        env = {'SECRET_KEY': 'test-genuine-secret-key-abcdef-12345'}
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(ImproperlyConfigured) as ctx:
+                import config.settings.prod
+                importlib.reload(config.settings.prod)
+            self.assertIn("ALLOWED_HOSTS", str(ctx.exception))
+
+    def test_wildcard_allowed_hosts_raises_improperly_configured(self):
+        import os, importlib
+        from unittest.mock import patch
+        from django.core.exceptions import ImproperlyConfigured
+        env = {
+            'SECRET_KEY': 'test-genuine-secret-key-abcdef-12345',
+            'ALLOWED_HOSTS': '*',
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(ImproperlyConfigured) as ctx:
+                import config.settings.prod
+                importlib.reload(config.settings.prod)
+            self.assertIn("Wildcard", str(ctx.exception))
+
+    def test_missing_db_password_raises_improperly_configured(self):
+        import os, importlib
+        from unittest.mock import patch
+        from django.core.exceptions import ImproperlyConfigured
+        env = {
+            'SECRET_KEY': 'test-genuine-secret-key-abcdef-12345',
+            'ALLOWED_HOSTS': 'tracking.police.gov.in',
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(ImproperlyConfigured) as ctx:
+                import config.settings.prod
+                importlib.reload(config.settings.prod)
+            self.assertIn("DB_PASSWORD", str(ctx.exception))
+
+    def test_valid_production_config_succeeds(self):
+        import os, importlib
+        from unittest.mock import patch
+        env = {
+            'SECRET_KEY': 'test-genuine-secret-key-abcdef-12345',
+            'ALLOWED_HOSTS': 'tracking.police.gov.in,13.235.10.20',
+            'DB_PASSWORD': 'strong_prod_db_pass_99812#',
+            'GDAL_LIBRARY_PATH': os.environ.get('GDAL_LIBRARY_PATH', ''),
+            'GEOS_LIBRARY_PATH': os.environ.get('GEOS_LIBRARY_PATH', ''),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            import config.settings.prod
+            mod = importlib.reload(config.settings.prod)
+            self.assertEqual(mod.ALLOWED_HOSTS, ['tracking.police.gov.in', '13.235.10.20'])
+            self.assertEqual(mod.DATABASES['default']['PASSWORD'], 'strong_prod_db_pass_99812#')
+            self.assertEqual(mod.DATABASES['default']['HOST'], 'db')
+            self.assertEqual(mod.DATABASES['default']['PORT'], '5432')

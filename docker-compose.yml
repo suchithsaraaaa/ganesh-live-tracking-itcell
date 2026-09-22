@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: ${DB_NAME:-ganesh_tracking}
       POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-police_secure_pass_2026}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD environment variable is required}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -25,11 +25,11 @@ services:
     restart: always
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
-      SECRET_KEY: ${SECRET_KEY:-police_secret_key_change_in_production}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-*}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY environment variable is required}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS environment variable is required}
       DB_NAME: ${DB_NAME:-ganesh_tracking}
       DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-police_secure_pass_2026}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD environment variable is required}
       DB_HOST: db
       DB_PORT: 5432
       AWS_STORAGE_BUCKET_NAME: ${AWS_STORAGE_BUCKET_NAME:-}
