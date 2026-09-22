@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
-import { ActiveMarker, ProcessionState, TimestampLookupResult, JourneyBreadcrumb } from '../types';
+import { ActiveMarker, TimestampLookupResult, JourneyBreadcrumb } from '../types';
 
 interface LiveMapProps {
   markers: ActiveMarker[];
@@ -11,32 +11,73 @@ interface LiveMapProps {
   journeyTrail: JourneyBreadcrumb[] | null;
 }
 
-// Color map for Procession States (matches the Figma warm-dark operational palette)
-const STATE_COLORS: Record<ProcessionState, string> = {
-  NOT_STARTED: '#7A766E',
-  TRACKING: '#5E88A8',
-  MOVING: '#5FA776',
-  HOLDING: '#D9A93B',
-  AT_VISARJAN: '#C9A24A',
-  IMMERSION_COMPLETED: '#7A766E',
+// Height Classification Palette (Strict Rule: Marker color = Height ONLY)
+const HEIGHT_COLORS = {
+  GREEN: '#10B981',  // 15–20 ft
+  YELLOW: '#F59E0B', // 21–25 ft
+  RED: '#EF4444',    // 26+ ft
 };
 
-function createMarkerIcon(state: ProcessionState, isSelected: boolean = false): L.DivIcon {
-  const color = STATE_COLORS[state] || '#5E88A8';
-  const size = isSelected ? 36 : 28;
-  const pulse = state === 'MOVING' ? '<span class="absolute -inset-1 rounded-full bg-emerald-400 opacity-40 animate-ping"></span>' : '';
+export function getMarkerHeightColor(marker: ActiveMarker): string {
+  if (marker.height_classification === 'RED' || (marker.idol_height !== null && marker.idol_height !== undefined && marker.idol_height >= 26)) {
+    return HEIGHT_COLORS.RED;
+  }
+  if (marker.height_classification === 'YELLOW' || (marker.idol_height !== null && marker.idol_height !== undefined && marker.idol_height >= 21)) {
+    return HEIGHT_COLORS.YELLOW;
+  }
+  return HEIGHT_COLORS.GREEN;
+}
+
+function getStatusIndicator(marker: ActiveMarker): { pulse: string; badgeColor: string; label: string } {
+  const isLive = marker.connection_state === 'LIVE';
+  const isMoving = marker.procession_state === 'MOVING';
+
+  if (isLive && isMoving) {
+    return {
+      pulse: '<span class="absolute -inset-1.5 rounded-full bg-emerald-400 opacity-50 animate-ping"></span>',
+      badgeColor: '#10B981',
+      label: 'LIVE MOVING',
+    };
+  }
+  if (isLive) {
+    return {
+      pulse: '<span class="absolute -inset-1 rounded-full bg-emerald-400/30"></span>',
+      badgeColor: '#10B981',
+      label: 'LIVE',
+    };
+  }
+  if (marker.connection_state === 'DEGRADED') {
+    return {
+      pulse: '',
+      badgeColor: '#F59E0B',
+      label: 'STALE',
+    };
+  }
+  return {
+    pulse: '',
+    badgeColor: '#78716C',
+    label: 'OFFLINE',
+  };
+}
+
+function createMarkerIcon(marker: ActiveMarker, isSelected: boolean = false): L.DivIcon {
+  const heightColor = getMarkerHeightColor(marker);
+  const status = getStatusIndicator(marker);
+  const size = isSelected ? 38 : 30;
 
   return L.divIcon({
     className: 'custom-leaflet-marker',
     html: `
       <div class="relative flex items-center justify-center" style="width: ${size}px; height: ${size}px;">
-        ${pulse}
-        <div style="background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${isSelected ? '3px solid #F2EFE9' : '2px solid #0B0B0A'}; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);">
-          <svg style="width: ${size * 0.5}px; height: ${size * 0.5}px; color: white;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        ${status.pulse}
+        <div style="background-color: ${heightColor}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${isSelected ? '3px solid #FFFFFF' : '2px solid #0B0B0A'}; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);">
+          <svg style="width: ${size * 0.48}px; height: ${size * 0.48}px; color: white;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path>
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
           </svg>
         </div>
+        <!-- Status indicator dot on bottom right -->
+        <span style="position: absolute; bottom: 0; right: 0; width: 9px; height: 9px; border-radius: 50%; background-color: ${status.badgeColor}; border: 1.5px solid #0B0B0A;"></span>
       </div>
     `,
     iconSize: [size, size],
@@ -49,8 +90,8 @@ function createHistoricalIcon(): L.DivIcon {
   return L.divIcon({
     className: 'historical-marker',
     html: `
-      <div style="background-color: #D9524A; width: 32px; height: 32px; border-radius: 50%; border: 3px solid #F2EFE9; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
-        <span style="color: #0B0B0A; font-weight: 700; font-size: 10px;">HIST</span>
+      <div style="background-color: #EF4444; width: 32px; height: 32px; border-radius: 50%; border: 3px solid #FFFFFF; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+        <span style="color: #FFFFFF; font-weight: 700; font-size: 10px;">HIST</span>
       </div>
     `,
     iconSize: [32, 32],
@@ -132,15 +173,28 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     displayMarkers.forEach((m) => {
       const isSelected = selectedMarker?.gpid === m.gpid;
       const marker = L.marker([m.latitude, m.longitude], {
-        icon: createMarkerIcon(m.procession_state, isSelected),
+        icon: createMarkerIcon(m, isSelected),
         title: `GPID: ${m.gpid}`,
       });
 
+      const heightColor = getMarkerHeightColor(m);
+      const heightText = m.idol_height ? `${m.idol_height} ft` : '>=15 ft';
+      const heightCategory = m.height_classification === 'RED'
+        ? '26+ FT'
+        : m.height_classification === 'YELLOW'
+        ? '21–25 FT'
+        : '15–20 FT';
+
       // Build Marker Popup
       const popupHtml = `
-        <div style="font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.4;">
-          <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: #D9793B; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; margin-bottom: 6px;">
-            GPID: ${m.gpid}
+        <div style="font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.4; min-width: 190px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; margin-bottom: 6px;">
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; color: #D9793B;">
+              ${m.gpid}
+            </span>
+            <span style="background-color: ${heightColor}20; color: ${heightColor}; border: 1px solid ${heightColor}50; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px;">
+              ${heightText} (${heightCategory})
+            </span>
           </div>
           <div style="font-weight: 600; color: #F2EFE9; margin-bottom: 2px;">
             ${m.idol_name}
@@ -152,8 +206,9 @@ export const LiveMap: React.FC<LiveMapProps> = ({
             <span style="color: #9C9890;">Zone:</span> <span>${m.zone}</span>
             <span style="color: #9C9890;">Police Station:</span> <span>${m.police_station} (${m.ps_code})</span>
             <span style="color: #9C9890;">Constable:</span> <span>${m.assigned_constable?.name || 'Unassigned'}</span>
-            <span style="color: #9C9890;">Status:</span> <span style="font-weight: 600; color: ${STATE_COLORS[m.procession_state]};">${m.procession_state}</span>
-            <span style="color: #9C9890;">Freshness:</span> <span style="font-weight: 600;">${m.connection_state}</span>
+            <span style="color: #9C9890;">Procession:</span> <span style="font-weight: 600; color: #F2EFE9;">${m.procession_state}</span>
+            <span style="color: #9C9890;">Freshness:</span> <span style="font-weight: 600; color: ${m.connection_state === 'LIVE' ? '#10B981' : '#F59E0B'};">${m.connection_state}</span>
+            ${m.immersion_date ? `<span style="color: #9C9890;">Immersion:</span> <span>${m.immersion_date}</span>` : ''}
           </div>
           <div style="margin-top: 6px; font-size: 10px; color: #6B675F; text-align: right;">
             GPS: ${new Date(m.last_gps_timestamp).toLocaleTimeString()}
@@ -188,9 +243,9 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     if (journeyTrail && journeyTrail.length > 1) {
       const latlngs: L.LatLngExpression[] = journeyTrail.map((p) => [p.latitude, p.longitude]);
       const poly = L.polyline(latlngs, {
-        color: '#3b82f6',
+        color: '#F59E0B',
         weight: 4,
-        opacity: 0.8,
+        opacity: 0.85,
         dashArray: '4, 8',
       }).addTo(map);
       polylineLayerRef.current = poly;
@@ -217,7 +272,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
 
       const histPopupHtml = `
         <div style="font-family: 'Inter', sans-serif; font-size: 12px; color: #C7C4BC;">
-          <div style="font-weight: 600; color: #D9524A; margin-bottom: 4px;">HISTORICAL GPS POINT</div>
+          <div style="font-weight: 600; color: #EF4444; margin-bottom: 4px;">HISTORICAL GPS POINT</div>
           <div><b style="color:#F2EFE9;">GPID:</b> ${historicalLookup.gpid}</div>
           <div><b style="color:#F2EFE9;">Recorded:</b> ${new Date(np.recorded_at).toLocaleString()}</div>
           <div><b style="color:#F2EFE9;">Time Delta:</b> ${np.time_difference_seconds}s from query</div>
@@ -238,17 +293,29 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       {selectedMarker && (
         <div className="absolute top-3 left-3 z-[1000] bg-elevated/95 border border-accent/40 rounded-lg p-3 shadow-xl backdrop-blur max-w-sm flex items-start justify-between">
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-accent">
-              Isolated Tracking Mode
+            <div className="flex items-center space-x-2">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-accent">
+                Isolated Tracking Mode
+              </span>
+              <span
+                className="text-[9px] font-bold px-1.5 py-0.5 rounded border"
+                style={{
+                  color: getMarkerHeightColor(selectedMarker),
+                  borderColor: `${getMarkerHeightColor(selectedMarker)}50`,
+                  backgroundColor: `${getMarkerHeightColor(selectedMarker)}15`,
+                }}
+              >
+                {selectedMarker.idol_height ? `${selectedMarker.idol_height} ft` : '>=15 ft'}
+              </span>
             </div>
-            <div className="text-sm font-semibold text-text-primary mono">
+            <div className="text-sm font-semibold text-text-primary mono mt-0.5">
               GPID: {selectedMarker.gpid}
             </div>
             <div className="text-xs text-text-secondary truncate">
               {selectedMarker.idol_name} &bull; {selectedMarker.police_station}
             </div>
             <div className="text-[11px] text-text-tertiary mt-1">
-              Status: <span style={{ color: STATE_COLORS[selectedMarker.procession_state] }} className="font-semibold">{selectedMarker.procession_state}</span>
+              Procession: <span className="font-semibold text-text-primary">{selectedMarker.procession_state}</span>
               &nbsp;&bull;&nbsp; Freshness: <span className="font-semibold text-text-secondary">{selectedMarker.connection_state}</span>
             </div>
           </div>
@@ -261,6 +328,44 @@ export const LiveMap: React.FC<LiveMapProps> = ({
           </button>
         </div>
       )}
+
+      {/* Compact Operational Map Legend (Rule 12) */}
+      <div className="absolute bottom-4 left-4 z-[1000] bg-elevated/90 border border-border-default/60 backdrop-blur-md rounded-md p-2.5 shadow-xl text-[11px] pointer-events-auto">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">
+          Idol Height
+        </div>
+        <div className="flex flex-col gap-1 mb-2">
+          <div className="flex items-center space-x-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#10B981] shrink-0" />
+            <span className="text-text-primary">15–20 FT (Green)</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#F59E0B] shrink-0" />
+            <span className="text-text-primary">21–25 FT (Yellow)</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444] shrink-0" />
+            <span className="text-text-primary">26+ FT (Red)</span>
+          </div>
+        </div>
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5 pt-1.5 border-t border-border-subtle">
+          Telemetry Freshness
+        </div>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-emerald-400/30 shrink-0" />
+            <span className="text-text-secondary">LIVE (Active Fix)</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+            <span className="text-text-secondary">STALE (Degraded)</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 rounded-full bg-stone-500 shrink-0" />
+            <span className="text-text-secondary">OFFLINE</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };

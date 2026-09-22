@@ -8,6 +8,8 @@ interface IdolTableProps {
   selectedZone: string;
   selectedPs: string;
   selectedStateFilter: string;
+  selectedHeightBucket?: string;
+  isImmersionsToday?: boolean;
   selectedGpid: string | null;
   onSelectIdol: (idol: Idol) => void;
 }
@@ -26,6 +28,8 @@ export const IdolTable: React.FC<IdolTableProps> = ({
   selectedZone,
   selectedPs,
   selectedStateFilter,
+  selectedHeightBucket = 'ALL',
+  isImmersionsToday = false,
   selectedGpid,
   onSelectIdol,
 }) => {
@@ -44,6 +48,8 @@ export const IdolTable: React.FC<IdolTableProps> = ({
         zone: selectedZone !== 'All Zones' ? selectedZone : undefined,
         police_station: selectedPs || undefined,
         procession_state: selectedStateFilter !== 'ALL' ? selectedStateFilter : undefined,
+        height_bucket: selectedHeightBucket !== 'ALL' ? selectedHeightBucket : undefined,
+        immersions_today: isImmersionsToday ? true : undefined,
         page,
       });
       setIdols(data.results);
@@ -59,7 +65,7 @@ export const IdolTable: React.FC<IdolTableProps> = ({
   useEffect(() => {
     setCurrentPage(1);
     loadData(1);
-  }, [searchTerm, selectedZone, selectedPs, selectedStateFilter]);
+  }, [searchTerm, selectedZone, selectedPs, selectedStateFilter, selectedHeightBucket, isImmersionsToday]);
 
   const totalPages = Math.ceil(totalCount / 50) || 1;
 
@@ -110,10 +116,12 @@ export const IdolTable: React.FC<IdolTableProps> = ({
             <thead className="bg-base text-text-tertiary sticky top-0 border-b border-border-subtle text-[10px] uppercase tracking-wider font-medium z-10">
               <tr>
                 <th className="py-2.5 px-3">GPID</th>
+                <th className="py-2.5 px-3">Height</th>
                 <th className="py-2.5 px-3">Idol / Pandal Name</th>
                 <th className="py-2.5 px-3">Zone</th>
                 <th className="py-2.5 px-3">Police Station</th>
                 <th className="py-2.5 px-3">Status</th>
+                <th className="py-2.5 px-3">Immersion Date</th>
                 <th className="py-2.5 px-3">Immersion Waterbody</th>
                 <th className="py-2.5 px-3 text-right">Action</th>
               </tr>
@@ -122,6 +130,13 @@ export const IdolTable: React.FC<IdolTableProps> = ({
               {idols.map((idol) => {
                 const isSelected = selectedGpid === idol.gpid;
                 const color = STATE_COLOR[idol.procession_state] || STATE_COLOR.NOT_STARTED;
+                const heightBadgeColor =
+                  idol.height_classification === 'RED' || (idol.idol_height && idol.idol_height >= 26)
+                    ? '#EF4444'
+                    : idol.height_classification === 'YELLOW' || (idol.idol_height && idol.idol_height >= 21)
+                    ? '#F59E0B'
+                    : '#10B981';
+
                 return (
                   <tr
                     key={idol.id}
@@ -132,6 +147,18 @@ export const IdolTable: React.FC<IdolTableProps> = ({
                   >
                     <td className="py-2 px-3 mono font-medium text-text-primary">
                       {idol.gpid}
+                    </td>
+                    <td className="py-2 px-3">
+                      <span
+                        className="text-[10px] font-bold px-1.5 py-0.5 rounded border"
+                        style={{
+                          color: heightBadgeColor,
+                          borderColor: `${heightBadgeColor}50`,
+                          backgroundColor: `${heightBadgeColor}15`,
+                        }}
+                      >
+                        {idol.idol_height ? `${idol.idol_height} ft` : '>=15 ft'}
+                      </span>
                     </td>
                     <td className="py-2 px-3 text-text-secondary">
                       <div className="truncate max-w-[200px] font-medium text-text-primary">{idol.name}</div>
@@ -148,6 +175,9 @@ export const IdolTable: React.FC<IdolTableProps> = ({
                       <span className="text-[10px] font-medium uppercase tracking-wide" style={{ color }}>
                         {idol.procession_state.replace('_', ' ')}
                       </span>
+                    </td>
+                    <td className="py-2 px-3 mono text-text-secondary">
+                      {idol.immersion_date || '–'}
                     </td>
                     <td className="py-2 px-3 text-text-tertiary truncate max-w-[150px]">
                       {idol.river_name || 'Hussain Sagar'}

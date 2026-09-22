@@ -10,7 +10,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
-from .models import TrackingSession, LocationPoint, TrackingSessionStatus
+import math
+from .models import TrackingSession, LocationPoint, TrackingSessionStatus, IdolEvent, IdolEventType
 from .serializers import (
     TrackingSessionSerializer,
     StartTrackingSerializer,
@@ -20,6 +21,30 @@ from .serializers import (
 )
 from apps.accounts.models import User
 from apps.idols.models import Idol, ProcessionState
+
+
+def calculate_sequential_distance_km(points):
+    """
+    Computes total travel distance from sequential GPS coordinates using Haversine formula.
+    Filters micro-jitter (< 5 meters).
+    """
+    if len(points) < 2:
+        return 0.0
+
+    R = 6371.0  # Earth radius in km
+    total_km = 0.0
+    for i in range(1, len(points)):
+        lat1, lon1 = points[i - 1].latitude, points[i - 1].longitude
+        lat2, lon2 = points[i].latitude, points[i].longitude
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        segment = R * c
+        if segment >= 0.005:  # ignore < 5m GPS noise
+            total_km += segment
+
+    return round(total_km, 2)
 
 
 def get_connection_state(last_recorded_at):
@@ -75,6 +100,18 @@ class StartTrackingView(APIView):
             if idol.procession_state == ProcessionState.NOT_STARTED:
                 idol.procession_state = ProcessionState.TRACKING
                 idol.save(update_fields=['procession_state', 'updated_at'])
+
+            # Log operational event
+            IdolEvent.objects.create(
+                idol=idol,
+                gpid=idol.gpid,
+                event_type=IdolEventType.TRACKING_STARTED,
+                timestamp=timezone.now(),
+                zone=idol.zone,
+                actor=request.user,
+                tracking_session=session,
+                metadata={'device_info': device_info, 'constable': assignment.constable.username}
+            )
 
         return Response(TrackingSessionSerializer(session).data, status=status.HTTP_201_CREATED)
 
@@ -214,6 +251,40 @@ class StopTrackingView(APIView):
         if final_state in [ProcessionState.AT_VISARJAN, ProcessionState.IMMERSION_COMPLETED]:
             idol.procession_state = final_state
             idol.save(update_fields=['procession_state', 'updated_at'])
+
+        # Log operational event
+        now = timezone.now()
+        IdolEvent.objects.create(
+            idol=idol,
+            gpid=idol.gpid,
+            event_type=IdolEventType.TRACKING_STOPPED,
+            timestamp=now,
+            zone=idol.zone,
+            actor=request.user,
+            tracking_session=session,
+            metadata={'final_state': final_state or idol.procession_state}
+        )
+
+        if final_state == ProcessionState.AT_VISARJAN:
+            IdolEvent.objects.create(
+                idol=idol,
+                gpid=idol.gpid,
+                event_type=IdolEventType.VISARJAN_REACHED,
+                timestamp=now,
+                zone=idol.zone,
+                actor=request.user,
+                tracking_session=session
+            )
+        elif final_state == ProcessionState.IMMERSION_COMPLETED:
+            IdolEvent.objects.create(
+                idol=idol,
+                gpid=idol.gpid,
+                event_type=IdolEventType.IMMERSION_COMPLETED,
+                timestamp=now,
+                zone=idol.zone,
+                actor=request.user,
+                tracking_session=session
+            )
 
         return Response({
             'status': 'stopped',
@@ -360,6 +431,23 @@ class JourneyView(APIView):
         last_recorded = points_list[-1]['recorded_at']
         connection_state = get_connection_state(last_recorded)
 
+        # Calculate actual sequential travelled distance (Haversine)
+        distance_km = calculate_sequential_distance_km(points)
+
+        # Retrieve operational event timeline
+        raw_events = IdolEvent.objects.filter(idol=idol).order_by('timestamp').select_related('actor')
+        events_list = [{
+            'id': ev.id,
+            'event_type': ev.event_type,
+            'label': ev.get_event_type_display(),
+            'timestamp': ev.timestamp,
+            'latitude': ev.latitude,
+            'longitude': ev.longitude,
+            'zone': ev.zone,
+            'actor': ev.actor.get_full_name() or ev.actor.username if ev.actor else None,
+            'metadata': ev.metadata
+        } for ev in raw_events]
+
         return Response({
             'gpid': idol.gpid,
             'idol_name': idol.name,
@@ -372,8 +460,10 @@ class JourneyView(APIView):
                 'start_time': start_time,
                 'end_time': end_time,
                 'max_speed_kmh': round(max_speed * 3.6, 2),  # m/s to km/h
+                'distance_travelled_km': distance_km,
             },
-            'points': points_list
+            'points': points_list,
+            'events': events_list
         })
 
 

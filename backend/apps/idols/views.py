@@ -1,8 +1,11 @@
+from datetime import datetime
+from django.utils import timezone
+from django.db.models import Count, Q
 from rest_framework import generics, filters, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Count, Q
+
 from .models import Idol, ProcessionState
 from .serializers import IdolListSerializer, IdolDetailSerializer
 from common.permissions import filter_by_jurisdiction
@@ -10,26 +13,121 @@ from apps.tracking.models import TrackingSession, LocationPoint, TrackingSession
 from apps.tracking.views import get_connection_state
 
 
+def get_height_classification(height):
+    """
+    Classifies idol height into operational bands:
+    - GREEN: 15 <= height < 21 ft (15–20 ft band)
+    - YELLOW: 21 <= height < 26 ft (21–25 ft band)
+    - RED: height >= 26 ft (26+ ft band)
+    - SUBTHRESHOLD: height < 15 ft (non-operational)
+    """
+    if height is None:
+        return 'UNKNOWN'
+    try:
+        h = float(height)
+    except (ValueError, TypeError):
+        return 'UNKNOWN'
+
+    if 15.0 <= h < 21.0:
+        return 'GREEN'
+    elif 21.0 <= h < 26.0:
+        return 'YELLOW'
+    elif h >= 26.0:
+        return 'RED'
+    return 'SUBTHRESHOLD'
+
+
+def apply_idol_filters(qs, params, user=None):
+    """
+    Applies unified operational filters to an Idol queryset:
+    - Default rule: idol_height >= 15 (only bypassed for MAIN_OFFICER diagnostics)
+    - Height buckets: 15_20, 21_25, above_25
+    - Generic min_height / max_height
+    - Immersions Today / exact immersion_date / immr_date alias
+    - Zone, Division, Police Station, Procession State
+    All conditions compose using AND logic.
+    """
+    # 1. Operational 15+ ft threshold enforcement
+    include_subthreshold = params.get('include_subthreshold', '').lower() in ['true', '1', 'yes']
+    if not (include_subthreshold and user and getattr(user, 'role', None) == 'MAIN_OFFICER'):
+        qs = qs.filter(idol_height__gte=15)
+
+    # 2. Height bucket filtering
+    height_bucket = params.get('height_bucket')
+    if height_bucket:
+        hb = height_bucket.lower().strip()
+        if hb in ['15_20', '15-20', 'green']:
+            qs = qs.filter(idol_height__gte=15, idol_height__lt=21)
+        elif hb in ['21_25', '21-25', 'yellow']:
+            qs = qs.filter(idol_height__gte=21, idol_height__lt=26)
+        elif hb in ['above_25', '26_plus', '26+', 'red']:
+            qs = qs.filter(idol_height__gte=26)
+
+    # 3. Generic min / max height
+    min_h = params.get('min_height')
+    if min_h:
+        try:
+            qs = qs.filter(idol_height__gte=float(min_h))
+        except ValueError:
+            pass
+
+    max_h = params.get('max_height')
+    if max_h:
+        try:
+            qs = qs.filter(idol_height__lte=float(max_h))
+        except ValueError:
+            pass
+
+    # 4. Immersion date filtering (localdate in Asia/Kolkata)
+    immersions_today = params.get('immersions_today', '').lower() in ['true', '1', 'yes']
+    immr_date = params.get('immersion_date') or params.get('immr_date')
+    if immersions_today or immr_date == 'today':
+        qs = qs.filter(immersion_date=timezone.localdate())
+    elif immr_date:
+        try:
+            target_date = datetime.strptime(immr_date.strip(), '%Y-%m-%d').date()
+            qs = qs.filter(immersion_date=target_date)
+        except ValueError:
+            pass
+
+    # 5. Jurisdiction / Location filters
+    zone = params.get('zone')
+    if zone and zone != 'All Zones':
+        qs = qs.filter(zone__iexact=zone)
+
+    division = params.get('division')
+    if division:
+        qs = qs.filter(division__iexact=division)
+
+    ps = params.get('police_station')
+    if ps:
+        qs = qs.filter(police_station__iexact=ps)
+
+    # 6. Procession state filter
+    procession_state = params.get('procession_state')
+    if procession_state and procession_state != 'ALL':
+        qs = qs.filter(procession_state=procession_state)
+
+    return qs
+
+
 class DashboardStatsView(APIView):
     """
     High-level operational overview cards and active tracking markers.
-    Enforces server-side jurisdiction.
+    Enforces server-side jurisdiction and the 15+ ft operational rule.
+    Guarantees One GPID = One Map Marker.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         qs = filter_by_jurisdiction(Idol.objects.all(), request.user)
+        qs = apply_idol_filters(qs, request.query_params, request.user)
 
-        # Apply optional zone / PS filter
-        zone = request.query_params.get('zone')
-        if zone:
-            qs = qs.filter(zone__iexact=zone)
-        ps = request.query_params.get('police_station')
-        if ps:
-            qs = qs.filter(police_station__iexact=ps)
-
-        # Operational KPIs
+        # Operational KPIs (all evaluated on the operational population)
         total_idols = qs.count()
+        today = timezone.localdate()
+        immersions_today_count = qs.filter(immersion_date=today).count()
+
         counts_by_state = dict(
             qs.values_list('procession_state').annotate(c=Count('id'))
         )
@@ -43,20 +141,34 @@ class DashboardStatsView(APIView):
         immersion_completed = counts_by_state.get(ProcessionState.IMMERSION_COMPLETED, 0)
         not_started = counts_by_state.get(ProcessionState.NOT_STARTED, 0)
 
-        unassigned_count = qs.filter(assignments__is_active=True).count()
-        unassigned = total_idols - unassigned_count
+        # Distinct assigned count (prevents duplicate joins)
+        assigned_count = qs.filter(assignments__is_active=True).distinct().count()
+        unassigned = max(0, total_idols - assigned_count)
 
-        # Query active tracking sessions for map markers
+        # Height distribution counts for current eligible query
+        h_15_20 = qs.filter(idol_height__gte=15, idol_height__lt=21).count()
+        h_21_25 = qs.filter(idol_height__gte=21, idol_height__lt=26).count()
+        h_26_plus = qs.filter(idol_height__gte=26).count()
+
+        # Query active tracking sessions for map markers:
+        # Enforce ONE GPID = ONE MARKER by tracking seen_gpids
         active_sessions = TrackingSession.objects.filter(
             assignment__idol__in=qs,
             status=TrackingSessionStatus.ACTIVE
-        ).select_related('assignment__idol', 'assignment__constable')
+        ).select_related('assignment__idol', 'assignment__constable').order_by('-started_at')
 
         active_markers = []
+        seen_gpids = set()
         offline_or_degraded = 0
+
+        can_view_contact = request.user.role in ['MAIN_OFFICER', 'ACP', 'SHO']
 
         for sess in active_sessions:
             idol = sess.assignment.idol
+            if idol.gpid in seen_gpids:
+                continue
+            seen_gpids.add(idol.gpid)
+
             constable = sess.assignment.constable
             latest_pt = sess.location_points.order_by('-recorded_at').first()
 
@@ -65,6 +177,7 @@ class DashboardStatsView(APIView):
                 offline_or_degraded += 1
 
             if latest_pt:
+                height_val = float(idol.idol_height) if idol.idol_height is not None else None
                 active_markers.append({
                     'id': idol.id,
                     'gpid': idol.gpid,
@@ -82,11 +195,17 @@ class DashboardStatsView(APIView):
                     'heading': latest_pt.heading,
                     'accuracy': latest_pt.accuracy,
                     'last_gps_timestamp': latest_pt.recorded_at,
+                    'idol_height': height_val,
+                    'height_classification': get_height_classification(height_val),
+                    'immersion_date': str(idol.immersion_date) if idol.immersion_date else None,
+                    'origin_location': idol.address or idol.instal_street or idol.instal_village or 'N/A',
+                    'destination': idol.river_name or idol.lake_type or 'Visarjan Site',
+                    'owner_name': idol.name or idol.association_name or 'N/A',
                     'assigned_constable': {
                         'id': constable.id,
                         'name': constable.get_full_name() or constable.username,
                         'police_id': constable.police_id,
-                        'phone_number': constable.phone_number
+                        'phone_number': constable.phone_number if can_view_contact else None
                     }
                 })
 
@@ -99,18 +218,22 @@ class DashboardStatsView(APIView):
                 'at_visarjan': at_visarjan,
                 'immersion_completed': immersion_completed,
                 'not_started': not_started,
-                'unassigned': max(0, unassigned),
+                'unassigned': unassigned,
                 'offline_or_degraded': offline_or_degraded,
+                'immersions_today': immersions_today_count,
+                'h_15_20': h_15_20,
+                'h_21_25': h_21_25,
+                'h_26_plus': h_26_plus,
             },
             'active_markers_count': len(active_markers),
             'active_markers': active_markers
         })
 
 
-
 class IdolListView(generics.ListAPIView):
     """
     List idols with server-side jurisdiction enforcement, search, and filtering.
+    Defaults strictly to operational idols (>= 15 ft).
     """
     serializer_class = IdolListSerializer
     permission_classes = [IsAuthenticated]
@@ -129,24 +252,8 @@ class IdolListView(generics.ListAPIView):
         qs = Idol.objects.all()
         # Enforce server-side jurisdiction filter
         qs = filter_by_jurisdiction(qs, self.request.user)
-
-        # Apply optional query params
-        zone = self.request.query_params.get('zone')
-        if zone:
-            qs = qs.filter(zone__iexact=zone)
-
-        division = self.request.query_params.get('division')
-        if division:
-            qs = qs.filter(division__iexact=division)
-
-        ps = self.request.query_params.get('police_station')
-        if ps:
-            qs = qs.filter(police_station__iexact=ps)
-
-        procession_state = self.request.query_params.get('procession_state')
-        if procession_state:
-            qs = qs.filter(procession_state=procession_state)
-
+        # Enforce operational threshold and composition filters
+        qs = apply_idol_filters(qs, self.request.query_params, self.request.user)
         return qs
 
 

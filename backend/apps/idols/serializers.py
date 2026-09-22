@@ -8,6 +8,9 @@ class IdolListSerializer(serializers.ModelSerializer):
     Lean operational serializer for dashboard and maps.
     Strictly excludes sensitive personal phone numbers and emails.
     """
+    height_classification = serializers.SerializerMethodField()
+    is_operational_eligible = serializers.SerializerMethodField()
+
     class Meta:
         model = Idol
         fields = [
@@ -23,6 +26,8 @@ class IdolListSerializer(serializers.ModelSerializer):
             'ps_code',
             'address',
             'idol_height',
+            'height_classification',
+            'is_operational_eligible',
             'pandal_height',
             'immersion_date',
             'river_name',
@@ -34,6 +39,21 @@ class IdolListSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
 
+    def get_height_classification(self, obj):
+        if obj.idol_height is None:
+            return 'UNKNOWN'
+        h = float(obj.idol_height)
+        if 15.0 <= h < 21.0:
+            return 'GREEN'
+        elif 21.0 <= h < 26.0:
+            return 'YELLOW'
+        elif h >= 26.0:
+            return 'RED'
+        return 'SUBTHRESHOLD'
+
+    def get_is_operational_eligible(self, obj):
+        return bool(obj.idol_height is not None and obj.idol_height >= 15.0)
+
 
 class IdolDetailSerializer(serializers.ModelSerializer):
     """
@@ -41,6 +61,8 @@ class IdolDetailSerializer(serializers.ModelSerializer):
     Includes contact info only for authorized senior/station officers.
     """
     contact_info = serializers.SerializerMethodField()
+    height_classification = serializers.SerializerMethodField()
+    is_operational_eligible = serializers.SerializerMethodField()
 
     class Meta:
         model = Idol
@@ -62,6 +84,8 @@ class IdolDetailSerializer(serializers.ModelSerializer):
             'instal_village',
             'instal_pin',
             'idol_height',
+            'height_classification',
+            'is_operational_eligible',
             'pandal_height',
             'immersion_date',
             'river_name',
@@ -77,6 +101,21 @@ class IdolDetailSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
+
+    def get_height_classification(self, obj):
+        if obj.idol_height is None:
+            return 'UNKNOWN'
+        h = float(obj.idol_height)
+        if 15.0 <= h < 21.0:
+            return 'GREEN'
+        elif 21.0 <= h < 26.0:
+            return 'YELLOW'
+        elif h >= 26.0:
+            return 'RED'
+        return 'SUBTHRESHOLD'
+
+    def get_is_operational_eligible(self, obj):
+        return bool(obj.idol_height is not None and obj.idol_height >= 15.0)
 
     def get_contact_info(self, obj):
         request = self.context.get('request')

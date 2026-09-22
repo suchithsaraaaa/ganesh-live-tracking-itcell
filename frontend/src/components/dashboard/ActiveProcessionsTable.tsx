@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { ActiveMarker, ProcessionState } from '../../types';
 
 interface ActiveProcessionsTableProps {
@@ -26,11 +26,12 @@ const STATE_COLOR: Record<ProcessionState, string> = {
 };
 
 const COLS = [
-  { key: 'gpid', label: 'GPID', width: 'w-44' },
+  { key: 'gpid', label: 'GPID', width: 'w-40' },
+  { key: 'height', label: 'Height', width: 'w-24' },
   { key: 'zone', label: 'Zone', width: 'w-24' },
-  { key: 'ps', label: 'Police Station', width: 'w-40' },
+  { key: 'ps', label: 'Police Station', width: 'w-36' },
   { key: 'status', label: 'Status', width: 'w-28' },
-  { key: 'assignment', label: 'Assignment', width: 'w-40' },
+  { key: 'assignment', label: 'Assignment', width: 'w-36' },
   { key: 'location', label: 'Last Location', width: 'flex-1' },
   { key: 'update', label: 'Last Update', width: 'w-24' },
 ];
@@ -40,22 +41,42 @@ export const ActiveProcessionsTable: React.FC<ActiveProcessionsTableProps> = ({
   selectedGpid,
   onSelectMarker,
 }) => {
+  // Guarantee ONE GPID = ONE ROW (Rule 9 & 10)
+  const uniqueRows = useMemo(() => {
+    const seen = new Set<string>();
+    const list: ActiveMarker[] = [];
+    for (const m of markers) {
+      if (!seen.has(m.gpid)) {
+        seen.add(m.gpid);
+        list.push(m);
+      }
+    }
+    return list;
+  }, [markers]);
+
   return (
     <div className="flex flex-col min-h-0 overflow-x-auto">
-      <div className="flex items-center gap-2 px-1 pb-2 min-w-[880px] text-[10px] font-medium uppercase tracking-wider text-text-tertiary">
+      <div className="flex items-center gap-2 px-1 pb-2 min-w-[920px] text-[10px] font-medium uppercase tracking-wider text-text-tertiary">
         {COLS.map((c) => (
           <span key={c.key} className={c.width}>{c.label}</span>
         ))}
       </div>
 
-      {markers.length === 0 ? (
-        <div className="py-10 text-center text-xs text-text-tertiary bg-elevated border border-border-subtle rounded-lg min-w-[880px]">
+      {uniqueRows.length === 0 ? (
+        <div className="py-10 text-center text-xs text-text-tertiary bg-elevated border border-border-subtle rounded-lg min-w-[920px]">
           No active processions
         </div>
       ) : (
-        <div className="bg-elevated border border-border-subtle rounded-lg overflow-hidden min-w-[880px]">
-          {markers.map((m, i) => {
+        <div className="bg-elevated border border-border-subtle rounded-lg overflow-hidden min-w-[920px]">
+          {uniqueRows.map((m, i) => {
             const isSelected = selectedGpid === m.gpid;
+            const heightBadgeColor =
+              m.height_classification === 'RED' || (m.idol_height && m.idol_height >= 26)
+                ? '#EF4444'
+                : m.height_classification === 'YELLOW' || (m.idol_height && m.idol_height >= 21)
+                ? '#F59E0B'
+                : '#10B981';
+
             return (
               <button
                 key={m.gpid}
@@ -64,9 +85,21 @@ export const ActiveProcessionsTable: React.FC<ActiveProcessionsTableProps> = ({
                   i > 0 ? 'border-t border-border-subtle' : ''
                 } ${isSelected ? 'bg-elevated-2' : 'hover:bg-elevated-2/60'}`}
               >
-                <span className="w-44 mono font-medium text-text-primary truncate">{m.gpid}</span>
+                <span className="w-40 mono font-medium text-text-primary truncate">{m.gpid}</span>
+                <span className="w-24">
+                  <span
+                    className="text-[10px] font-bold px-1.5 py-0.5 rounded border"
+                    style={{
+                      color: heightBadgeColor,
+                      borderColor: `${heightBadgeColor}50`,
+                      backgroundColor: `${heightBadgeColor}15`,
+                    }}
+                  >
+                    {m.idol_height ? `${m.idol_height} ft` : '>=15 ft'}
+                  </span>
+                </span>
                 <span className="w-24 text-text-secondary truncate">{m.zone}</span>
-                <span className="w-40 text-text-secondary truncate">{m.police_station}</span>
+                <span className="w-36 text-text-secondary truncate">{m.police_station}</span>
                 <span className="w-28 flex items-center gap-1.5">
                   <span
                     className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -79,7 +112,7 @@ export const ActiveProcessionsTable: React.FC<ActiveProcessionsTableProps> = ({
                     {STATE_LABEL[m.procession_state]}
                   </span>
                 </span>
-                <span className="w-40 text-text-secondary truncate">
+                <span className="w-36 text-text-secondary truncate">
                   {m.assigned_constable?.name || 'Unassigned'}
                 </span>
                 <span className="flex-1 mono text-text-secondary truncate">

@@ -17,6 +17,10 @@ interface TrackingContextValue {
   setSelectedPs: (v: string) => void;
   selectedStateFilter: string;
   setSelectedStateFilter: (v: string) => void;
+  selectedHeightBucket: string;
+  setSelectedHeightBucket: (v: string) => void;
+  isImmersionsToday: boolean;
+  setIsImmersionsToday: (v: boolean) => void;
   clearFilters: () => void;
 
   selectedMarker: ActiveMarker | null;
@@ -55,6 +59,8 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [selectedZone, setSelectedZone] = useState('All Zones');
   const [selectedPs, setSelectedPs] = useState('');
   const [selectedStateFilter, setSelectedStateFilter] = useState('ALL');
+  const [selectedHeightBucket, setSelectedHeightBucket] = useState('ALL');
+  const [isImmersionsToday, setIsImmersionsToday] = useState(false);
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -75,13 +81,26 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const data = await fetchDashboardData({
         zone: selectedZone !== 'All Zones' ? selectedZone : undefined,
         police_station: selectedPs || undefined,
+        height_bucket: selectedHeightBucket !== 'ALL' ? selectedHeightBucket : undefined,
+        immersions_today: isImmersionsToday ? true : undefined,
       });
       setKpis(data.kpis);
-      setActiveMarkers(data.active_markers);
+
+      // Deduplicate markers by GPID to guarantee ONE GPID = ONE MARKER
+      const uniqueMarkers: ActiveMarker[] = [];
+      const seen = new Set<string>();
+      for (const m of data.active_markers) {
+        if (!seen.has(m.gpid)) {
+          seen.add(m.gpid);
+          uniqueMarkers.push(m);
+        }
+      }
+
+      setActiveMarkers(uniqueMarkers);
       setLastUpdated(new Date());
       setSelectedMarker((prev) => {
         if (!prev) return null;
-        const updated = data.active_markers.find((m) => m.gpid === prev.gpid);
+        const updated = uniqueMarkers.find((m) => m.gpid === prev.gpid);
         return updated || prev;
       });
     } catch (err) {
@@ -89,7 +108,7 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } finally {
       if (showSpin) setIsRefreshing(false);
     }
-  }, [selectedZone, selectedPs]);
+  }, [selectedZone, selectedPs, selectedHeightBucket, isImmersionsToday]);
 
   useEffect(() => {
     loadDashboard(true);
@@ -160,6 +179,8 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setSelectedZone('All Zones');
     setSelectedPs('');
     setSelectedStateFilter('ALL');
+    setSelectedHeightBucket('ALL');
+    setIsImmersionsToday(false);
   }, []);
 
   const openTimestampLookup = useCallback((gpid: string) => {
@@ -191,13 +212,21 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (selectedStateFilter === 'AT_VISARJAN' && m.procession_state !== 'AT_VISARJAN') return false;
       if (selectedStateFilter === 'IMMERSION_COMPLETED' && m.procession_state !== 'IMMERSION_COMPLETED') return false;
     }
+    if (selectedHeightBucket !== 'ALL') {
+      if (selectedHeightBucket === '15_20' && m.height_classification !== 'GREEN') return false;
+      if (selectedHeightBucket === '21_25' && m.height_classification !== 'YELLOW') return false;
+      if (selectedHeightBucket === 'above_25' && m.height_classification !== 'RED') return false;
+    }
     return true;
-  }), [activeMarkers, searchTerm, selectedStateFilter]);
+  }), [activeMarkers, searchTerm, selectedStateFilter, selectedHeightBucket]);
 
   const value: TrackingContextValue = {
     kpis, activeMarkers, filteredMarkers, isRefreshing, lastUpdated,
     searchTerm, setSearchTerm, selectedZone, setSelectedZone, selectedPs, setSelectedPs,
-    selectedStateFilter, setSelectedStateFilter, clearFilters,
+    selectedStateFilter, setSelectedStateFilter,
+    selectedHeightBucket, setSelectedHeightBucket,
+    isImmersionsToday, setIsImmersionsToday,
+    clearFilters,
     selectedMarker, isDrawerOpen, handleSelectMarker, handleSelectIdol, handleClearSelection,
     historicalLookup, setHistoricalLookup, journeyTrail, isLoadingJourney, handleToggleJourney,
     timestampModalOpen, targetGpidForLookup, openTimestampLookup, closeTimestampLookup,

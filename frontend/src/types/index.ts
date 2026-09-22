@@ -66,6 +66,8 @@ export interface Idol {
   ps_code: string;
   address: string;
   idol_height: number | null;
+  height_classification?: 'GREEN' | 'YELLOW' | 'RED' | 'SUBTHRESHOLD';
+  is_operational_eligible?: boolean;
   pandal_height: number | null;
   immersion_date: string | null;
   river_name: string;
@@ -102,16 +104,22 @@ export interface ActiveMarker {
   heading: number | null;
   accuracy: number | null;
   last_gps_timestamp: string;
+  idol_height?: number | null;
+  height_classification?: 'GREEN' | 'YELLOW' | 'RED';
+  immersion_date?: string | null;
+  origin_location?: string;
+  destination?: string;
+  owner_name?: string;
   assigned_constable: {
     id: number;
     name: string;
     police_id: string;
-    phone_number: string;
+    phone_number?: string | null;
   } | null;
 }
 
 export interface DashboardKPIs {
-  total_idols: number;
+  total_idols: number; // 15+ FT GPIDs
   tracking_active: number;
   moving: number;
   holding: number;
@@ -120,6 +128,10 @@ export interface DashboardKPIs {
   not_started: number;
   unassigned: number;
   offline_or_degraded: number;
+  immersions_today: number;
+  h_15_20?: number;
+  h_21_25?: number;
+  h_26_plus?: number;
 }
 
 export interface TimestampLookupResult {
@@ -154,6 +166,18 @@ export interface JourneyBreadcrumb {
   recorded_at: string;
 }
 
+export interface IdolTimelineEvent {
+  id: number;
+  event_type: string;
+  label: string;
+  timestamp: string;
+  latitude: number | null;
+  longitude: number | null;
+  zone: string;
+  actor: string | null;
+  metadata?: Record<string, any>;
+}
+
 export interface JourneyData {
   gpid: string;
   idol_name: string;
@@ -162,6 +186,8 @@ export interface JourneyData {
   procession_state: ProcessionState;
   connection_state: ConnectionState;
   total_points: number;
+  distance_travelled_km?: number | null;
+  events?: IdolTimelineEvent[];
   summary: {
     start_time: string | null;
     end_time: string | null;

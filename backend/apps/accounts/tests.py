@@ -31,13 +31,14 @@ class RBACAndJurisdictionTests(TestCase):
             role=UserRole.CONSTABLE, police_id='PC-101'
         )
 
-        # Idols in different police stations
+        # Idols in different police stations (operational 15+ ft)
         self.idol_cmr = Idol.objects.create(
             gpid='HYDCMRZCMNR0112',
             name='Charminar Ganesh',
             police_station='Charminar',
             division='Charminar',
             zone='Charminar',
+            idol_height=18.0,
             raw_metadata={'mobile_no': '9876543210'}
         )
         self.idol_mlp = Idol.objects.create(
@@ -46,6 +47,7 @@ class RBACAndJurisdictionTests(TestCase):
             police_station='Malakpet',
             division='Malakpet',
             zone='Charminar',
+            idol_height=18.0,
             raw_metadata={'mobile_no': '9123456780'}
         )
 

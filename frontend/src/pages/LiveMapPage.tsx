@@ -8,6 +8,7 @@ import { IdolTable } from '../components/IdolTable';
 export const LiveMapPage: React.FC = () => {
   const {
     searchTerm, setSearchTerm, selectedZone, setSelectedZone, selectedPs, setSelectedPs,
+    selectedHeightBucket, setSelectedHeightBucket, isImmersionsToday, setIsImmersionsToday,
     clearFilters, filteredMarkers, selectedMarker, handleSelectMarker, handleClearSelection,
     historicalLookup, journeyTrail, selectedStateFilter, handleSelectIdol,
   } = useTracking();
@@ -25,6 +26,10 @@ export const LiveMapPage: React.FC = () => {
             onZoneChange={setSelectedZone}
             selectedPs={selectedPs}
             onPsChange={setSelectedPs}
+            selectedHeightBucket={selectedHeightBucket}
+            onHeightBucketChange={setSelectedHeightBucket}
+            isImmersionsToday={isImmersionsToday}
+            onImmersionsTodayChange={setIsImmersionsToday}
             onClear={clearFilters}
           />
         </div>
@@ -69,6 +74,8 @@ export const LiveMapPage: React.FC = () => {
             selectedZone={selectedZone}
             selectedPs={selectedPs}
             selectedStateFilter={selectedStateFilter}
+            selectedHeightBucket={selectedHeightBucket}
+            isImmersionsToday={isImmersionsToday}
             selectedGpid={selectedMarker?.gpid || null}
             onSelectIdol={handleSelectIdol}
           />

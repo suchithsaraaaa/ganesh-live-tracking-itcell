@@ -82,13 +82,29 @@ class Assignment(models.Model):
         # End any existing active assignment for this constable
         cls.objects.filter(constable=constable, is_active=True).update(is_active=False, ended_at=now)
 
-        return cls.objects.create(
+        assignment = cls.objects.create(
             idol=idol,
             constable=constable,
             assigned_by=assigned_by,
             started_at=now,
             is_active=True
         )
+
+        try:
+            from apps.tracking.models import IdolEvent, IdolEventType
+            IdolEvent.objects.create(
+                idol=idol,
+                gpid=idol.gpid,
+                event_type=IdolEventType.ASSIGNMENT_CREATED,
+                timestamp=now,
+                zone=idol.zone,
+                actor=assigned_by,
+                metadata={'constable': constable.username, 'police_id': constable.police_id}
+            )
+        except Exception:
+            pass
+
+        return assignment
 
     @transaction.atomic
     def handover_to_constable(self, new_constable, reason='', actor=None):
@@ -117,6 +133,24 @@ class Assignment(models.Model):
             started_at=now,
             is_active=True
         )
+
+        try:
+            from apps.tracking.models import IdolEvent, IdolEventType
+            IdolEvent.objects.create(
+                idol=self.idol,
+                gpid=self.idol.gpid,
+                event_type=IdolEventType.ASSIGNMENT_HANDOVER,
+                timestamp=now,
+                zone=self.idol.zone,
+                actor=actor,
+                metadata={
+                    'previous_constable': self.constable.username,
+                    'new_constable': new_constable.username,
+                    'reason': reason
+                }
+            )
+        except Exception:
+            pass
 
         return new_assignment
 

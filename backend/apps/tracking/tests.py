@@ -223,3 +223,48 @@ class AndroidAPKIntegrationTests(TestCase):
         self.assertEqual(res_close.status_code, 200)
         session = TrackingSession.objects.get(id=int(user_session_id))
         self.assertEqual(session.status, TrackingSessionStatus.STOPPED)
+
+    def test_latest_location_returns_200_and_payload(self):
+        """Regression test for LatestLocationView.get() returning proper DRF Response."""
+        self.client.force_authenticate(user=self.pc)
+        session = TrackingSession.objects.create(
+            assignment=self.assignment,
+            status=TrackingSessionStatus.ACTIVE
+        )
+        LocationPoint.objects.create(
+            session=session,
+            latitude=17.3650,
+            longitude=78.4750,
+            accuracy=4.2,
+            speed=2.1,
+            heading=90.0,
+            recorded_at=timezone.now()
+        )
+        res = self.client.get(f'/api/v1/tracking/idols/{self.idol.gpid}/latest/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['gpid'], self.idol.gpid)
+        self.assertIsNotNone(res.data['latest_location'])
+        self.assertEqual(res.data['latest_location']['latitude'], 17.3650)
+        self.assertEqual(res.data['constable']['police_id'], self.pc.police_id)
+
+    def test_journey_view_includes_distance_and_events(self):
+        """JourneyView computes Haversine distance and returns operational events."""
+        self.client.force_authenticate(user=self.pc)
+        session = TrackingSession.objects.create(
+            assignment=self.assignment,
+            status=TrackingSessionStatus.ACTIVE
+        )
+        t0 = timezone.now()
+        # Point 1: Charminar (17.3616, 78.4747)
+        LocationPoint.objects.create(session=session, latitude=17.3616, longitude=78.4747, recorded_at=t0)
+        # Point 2: ~1 km away (17.3700, 78.4747)
+        LocationPoint.objects.create(session=session, latitude=17.3700, longitude=78.4747, recorded_at=t0 + timedelta(minutes=5))
+
+        res = self.client.get(f'/api/v1/tracking/idols/{self.idol.gpid}/journey/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['total_points'], 2)
+        self.assertGreater(res.data['summary']['distance_travelled_km'], 0.5)
+        self.assertIn('events', res.data)
+        # Assignment created event exists
+        event_types = [e['event_type'] for e in res.data['events']]
+        self.assertIn('ASSIGNMENT_CREATED', event_types)

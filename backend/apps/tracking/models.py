@@ -109,3 +109,63 @@ class LocationPoint(models.Model):
 
     def __str__(self):
         return f"({self.latitude:.5f}, {self.longitude:.5f}) at {self.recorded_at}"
+
+
+class IdolEventType(models.TextChoices):
+    TRACKING_STARTED = 'TRACKING_STARTED', 'Tracking Started'
+    TRACKING_STOPPED = 'TRACKING_STOPPED', 'Tracking Stopped'
+    ASSIGNMENT_CREATED = 'ASSIGNMENT_CREATED', 'Assignment Created'
+    ASSIGNMENT_HANDOVER = 'ASSIGNMENT_HANDOVER', 'Assignment Handover'
+    ZONE_ENTERED = 'ZONE_ENTERED', 'Zone Entered'
+    HOLDING_POINT_ENTERED = 'HOLDING_POINT_ENTERED', 'Holding Point Entered'
+    VISARJAN_REACHED = 'VISARJAN_REACHED', 'Visarjan Site Reached'
+    IMMERSION_COMPLETED = 'IMMERSION_COMPLETED', 'Immersion Completed'
+
+
+class IdolEvent(models.Model):
+    """
+    Chronological operational event history for an idol.
+    Captures operational state changes, assignments, and handovers without duplicating raw GPS telemetry.
+    """
+    idol = models.ForeignKey(
+        'idols.Idol',
+        on_delete=models.CASCADE,
+        related_name='operational_events'
+    )
+    gpid = models.CharField(max_length=64, db_index=True)
+    event_type = models.CharField(
+        max_length=50,
+        choices=IdolEventType.choices,
+        db_index=True
+    )
+    timestamp = models.DateTimeField(db_index=True)
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    zone = models.CharField(max_length=100, blank=True)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='idol_events_triggered'
+    )
+    tracking_session = models.ForeignKey(
+        TrackingSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='operational_events'
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['timestamp']
+        indexes = [
+            models.Index(fields=['idol', 'timestamp']),
+            models.Index(fields=['gpid', 'timestamp']),
+            models.Index(fields=['event_type', 'timestamp']),
+        ]
+
+    def __str__(self):
+        return f"{self.gpid} - {self.event_type} at {self.timestamp}"

@@ -72,7 +72,13 @@ export async function fetchCurrentUser(): Promise<User | null> {
 // Dashboard & Idols
 // ---------------------------------------------------------------------------
 
-export async function fetchDashboardData(filters?: { zone?: string; police_station?: string }): Promise<{
+export async function fetchDashboardData(filters?: {
+  zone?: string;
+  police_station?: string;
+  height_bucket?: string;
+  immersion_date?: string;
+  immersions_today?: boolean;
+}): Promise<{
   kpis: DashboardKPIs;
   active_markers_count: number;
   active_markers: ActiveMarker[];
@@ -80,6 +86,9 @@ export async function fetchDashboardData(filters?: { zone?: string; police_stati
   const params = new URLSearchParams();
   if (filters?.zone) params.append('zone', filters.zone);
   if (filters?.police_station) params.append('police_station', filters.police_station);
+  if (filters?.height_bucket && filters.height_bucket !== 'ALL') params.append('height_bucket', filters.height_bucket);
+  if (filters?.immersion_date) params.append('immersion_date', filters.immersion_date);
+  if (filters?.immersions_today) params.append('immersions_today', 'true');
 
   const res = await apiFetch(`/idols/dashboard/?${params.toString()}`);
   if (!res.ok) throw new ApiError('Failed to load dashboard metrics', res.status);
@@ -91,6 +100,11 @@ export async function fetchIdols(params?: {
   zone?: string;
   police_station?: string;
   procession_state?: string;
+  height_bucket?: string;
+  min_height?: number;
+  max_height?: number;
+  immersion_date?: string;
+  immersions_today?: boolean;
   page?: number;
 }): Promise<{ count: number; next: string | null; previous: string | null; results: Idol[] }> {
   const query = new URLSearchParams();
@@ -98,6 +112,11 @@ export async function fetchIdols(params?: {
   if (params?.zone) query.append('zone', params.zone);
   if (params?.police_station) query.append('police_station', params.police_station);
   if (params?.procession_state) query.append('procession_state', params.procession_state);
+  if (params?.height_bucket && params.height_bucket !== 'ALL') query.append('height_bucket', params.height_bucket);
+  if (params?.min_height !== undefined) query.append('min_height', params.min_height.toString());
+  if (params?.max_height !== undefined) query.append('max_height', params.max_height.toString());
+  if (params?.immersion_date) query.append('immersion_date', params.immersion_date);
+  if (params?.immersions_today) query.append('immersions_today', 'true');
   if (params?.page) query.append('page', params.page.toString());
 
   const res = await apiFetch(`/idols/?${query.toString()}`);

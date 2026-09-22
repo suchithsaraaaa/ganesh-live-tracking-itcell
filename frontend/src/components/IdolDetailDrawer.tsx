@@ -14,7 +14,7 @@ import {
   LucideIcon,
 } from 'lucide-react';
 import { ActiveMarker, Idol, JourneyBreadcrumb, ProcessionState } from '../types';
-import { fetchIdolDetail, getReportDownloadUrl } from '../api/client';
+import { fetchIdolDetail, fetchJourney, getReportDownloadUrl } from '../api/client';
 
 interface IdolDetailDrawerProps {
   marker: ActiveMarker | null;
@@ -99,10 +99,12 @@ export const IdolDetailDrawer: React.FC<IdolDetailDrawerProps> = ({
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>('journey');
+  const [journeyData, setJourneyData] = useState<any>(null);
 
   useEffect(() => {
     if (!marker?.gpid) {
       setIdolDetail(null);
+      setJourneyData(null);
       return;
     }
 
@@ -117,6 +119,10 @@ export const IdolDetailDrawer: React.FC<IdolDetailDrawerProps> = ({
         setError(err.message || 'Failed to fetch details');
         setLoading(false);
       });
+
+    fetchJourney(marker.gpid)
+      .then(setJourneyData)
+      .catch(() => setJourneyData(null));
   }, [marker?.gpid]);
 
   // Reset to the Journey tab whenever a new GPID is selected
@@ -138,6 +144,12 @@ export const IdolDetailDrawer: React.FC<IdolDetailDrawerProps> = ({
   if (!isOpen || !marker) return null;
 
   const stateColor = STATE_COLOR[marker.procession_state] || STATE_COLOR.NOT_STARTED;
+  const heightColor =
+    marker.height_classification === 'RED'
+      ? '#EF4444'
+      : marker.height_classification === 'YELLOW'
+      ? '#F59E0B'
+      : '#10B981';
 
   return (
     <aside className="w-96 bg-base border-l border-border-subtle flex flex-col h-full z-30 shadow-2xl overflow-hidden shrink-0">
@@ -164,7 +176,7 @@ export const IdolDetailDrawer: React.FC<IdolDetailDrawerProps> = ({
       </div>
 
       {/* Status & freshness ribbon */}
-      <div className="px-4 py-2.5 border-b border-border-subtle flex items-center justify-between text-xs">
+      <div className="px-4 py-2 border-b border-border-subtle flex items-center justify-between text-xs bg-elevated-1/50">
         <div className="flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: stateColor }} />
           <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: stateColor }}>
@@ -177,13 +189,82 @@ export const IdolDetailDrawer: React.FC<IdolDetailDrawerProps> = ({
         </div>
       </div>
 
+      {/* Primary Operational Summary Card (Rule 14 & 15 & 16 & 17) */}
+      <div className="p-3 mx-4 my-2.5 bg-elevated-1 border border-border-default/80 rounded-lg shadow-sm space-y-2">
+        <div className="flex items-center justify-between pb-1.5 border-b border-border-subtle">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-accent">
+            Operational Summary
+          </span>
+          <span
+            className="text-[10px] font-bold px-2 py-0.5 rounded border"
+            style={{
+              color: heightColor,
+              borderColor: `${heightColor}50`,
+              backgroundColor: `${heightColor}15`,
+            }}
+          >
+            {idolDetail?.idol_height || marker.idol_height ? `${idolDetail?.idol_height || marker.idol_height} ft` : '>=15 ft'} (
+            {marker.height_classification === 'RED' ? '26+ FT' : marker.height_classification === 'YELLOW' ? '21–25 FT' : '15–20 FT'})
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-x-2.5 gap-y-2 text-[11px]">
+          <div>
+            <span className="text-[9px] uppercase tracking-wider text-text-tertiary">GPID</span>
+            <p className="font-semibold text-text-primary mono truncate">{marker.gpid}</p>
+          </div>
+          <div>
+            <span className="text-[9px] uppercase tracking-wider text-text-tertiary">Constable Assigned</span>
+            <p className="font-medium text-text-primary truncate">
+              {marker.assigned_constable ? `${marker.assigned_constable.name}` : 'Unassigned'}
+            </p>
+          </div>
+          <div>
+            <span className="text-[9px] uppercase tracking-wider text-text-tertiary">Origin Location</span>
+            <p className="font-medium text-text-secondary truncate" title={idolDetail?.address || marker.origin_location || marker.police_station}>
+              {idolDetail?.address || marker.origin_location || marker.police_station}
+            </p>
+          </div>
+          <div>
+            <span className="text-[9px] uppercase tracking-wider text-text-tertiary">Destination</span>
+            <p className="font-medium text-text-secondary truncate" title={idolDetail?.river_name || marker.destination || 'Visarjan Waterbody'}>
+              {idolDetail?.river_name || marker.destination || 'Visarjan Waterbody'}
+            </p>
+          </div>
+          <div>
+            <span className="text-[9px] uppercase tracking-wider text-text-tertiary">Owner / Mandap</span>
+            <p className="font-medium text-text-primary truncate" title={idolDetail?.name || marker.owner_name || marker.idol_name}>
+              {idolDetail?.name || marker.owner_name || marker.idol_name}
+            </p>
+          </div>
+          <div>
+            <span className="text-[9px] uppercase tracking-wider text-text-tertiary">Contact Number</span>
+            <p className="font-medium text-text-secondary truncate">
+              {idolDetail?.contact_info?.mobile_no
+                ? idolDetail.contact_info.mobile_no
+                : idolDetail
+                ? 'Restricted / Authorized Only'
+                : 'Loading…'}
+            </p>
+          </div>
+          <div>
+            <span className="text-[9px] uppercase tracking-wider text-text-tertiary">Origin Zone</span>
+            <p className="font-medium text-text-secondary truncate">{idolDetail?.zone || marker.zone}</p>
+          </div>
+          <div>
+            <span className="text-[9px] uppercase tracking-wider text-text-tertiary">Current Zone</span>
+            <p className="font-medium text-text-secondary truncate">{marker.zone}</p>
+          </div>
+        </div>
+      </div>
+
       {/* Tabs */}
       <div className="flex items-center border-b border-border-subtle px-4">
         {TABS.map((tab) => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
-            className={`px-3 py-2.5 text-[11px] font-medium uppercase tracking-wider border-b-2 -mb-px transition-colors ${
+            className={`px-3 py-2 text-[11px] font-medium uppercase tracking-wider border-b-2 -mb-px transition-colors ${
               activeTab === tab.key
                 ? 'text-text-primary border-accent'
                 : 'text-text-tertiary border-transparent hover:text-text-secondary'
@@ -209,19 +290,59 @@ export const IdolDetailDrawer: React.FC<IdolDetailDrawerProps> = ({
             >
               <Navigation className="w-4 h-4 shrink-0" />
               <span className="font-medium text-[11px]">
-                {isLoadingJourney ? 'Loading journey…' : isJourneyActive ? 'Hide journey on map' : 'View journey on map'}
+                {isLoadingJourney ? 'Loading journey…' : isJourneyActive ? 'Hide journey path on map' : 'View recorded path on map'}
               </span>
             </button>
 
+            {/* Travelled Distance Display (Rule 46) */}
+            <div className="p-2.5 bg-elevated-1 border border-border-subtle rounded-md flex items-center justify-between text-[11px]">
+              <span className="text-text-tertiary uppercase tracking-wider text-[10px] font-medium">Distance Travelled</span>
+              <span className="font-semibold text-text-primary mono">
+                {journeyData?.distance_travelled_km !== undefined && journeyData?.distance_travelled_km !== null
+                  ? `${journeyData.distance_travelled_km} km`
+                  : 'Distance unavailable'}
+              </span>
+            </div>
+
+            {/* Operational Event Timeline (Rule 25 & 26) */}
+            {journeyData?.events && journeyData.events.length > 0 && (
+              <div className="p-2.5 bg-elevated-1 border border-border-subtle rounded-md space-y-2">
+                <div className="text-[10px] text-accent font-semibold uppercase tracking-wider">
+                  Operational Event History
+                </div>
+                <div className="relative pl-1 space-y-2">
+                  {journeyData.events.map((ev: any, idx: number) => (
+                    <div key={ev.id || idx} className="flex items-start gap-2.5 text-[11px]">
+                      <span className="w-2 h-2 rounded-full bg-accent mt-1 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-text-primary">{ev.label || ev.event_type}</span>
+                          <span className="mono text-[10px] text-text-tertiary">
+                            {new Date(ev.timestamp).toLocaleTimeString()}
+                          </span>
+                        </div>
+                        {ev.actor && (
+                          <div className="text-[10px] text-text-secondary">By: {ev.actor}</div>
+                        )}
+                        {ev.zone && (
+                          <div className="text-[10px] text-text-tertiary">Zone: {ev.zone}</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {!journeyTrail && (
-              <p className="text-text-tertiary text-center py-6">
-                No journey trail loaded yet for this GPID.
+              <p className="text-text-tertiary text-center py-4">
+                No recorded GPS trail loaded yet.
               </p>
             )}
 
             {journeyTrail && journeyTrail.length === 0 && (
-              <p className="text-text-tertiary text-center py-6">
-                No recorded breadcrumbs found for this idol yet.
+              <p className="text-text-tertiary text-center py-4">
+                No recorded GPS breadcrumbs found for this idol yet.
               </p>
             )}
 
