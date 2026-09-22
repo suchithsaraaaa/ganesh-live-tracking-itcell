@@ -151,6 +151,10 @@ else:
 # AWS S3 Configuration (Optional report storage)
 AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME', '')
 AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'ap-south-1')
-# When running on EC2 with an IAM Role, credentials evaluate to None so boto3 uses the default credential chain
+# AWS ACCESS CREDENTIALS
 AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID') or None
 AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY') or None
+
+# Geocoding Configuration
+GEOCODING_PROVIDER = os.environ.get('GEOCODING_PROVIDER', 'nominatim')
+GEOCODING_API_KEY = os.environ.get('GEOCODING_API_KEY', '')

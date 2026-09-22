@@ -180,14 +180,25 @@ export const IdolDetailDrawer: React.FC<IdolDetailDrawerProps> = ({
         <div className="flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: stateColor }} />
           <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: stateColor }}>
-            {STATE_LABEL[marker.procession_state]}
+            Procession: {STATE_LABEL[marker.procession_state]}
           </span>
         </div>
         <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
-          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CONNECTION_COLOR[marker.connection_state] }} />
-          <span>Telemetry: <strong className="text-text-primary font-medium">{marker.connection_state}</strong></span>
+          <span
+            className="w-1.5 h-1.5 rounded-full"
+            style={{
+              backgroundColor: marker.is_origin_marker ? '#94A3B8' : (CONNECTION_COLOR[marker.connection_state] || '#78716C'),
+            }}
+          />
+          <span>
+            Telemetry:{' '}
+            <strong className="text-text-primary font-medium">
+              {marker.is_origin_marker ? 'ORIGIN (NOT TRACKED)' : marker.connection_state}
+            </strong>
+          </span>
         </div>
       </div>
+
 
       {/* Primary Operational Summary Card (Rule 14 & 15 & 16 & 17) */}
       <div className="p-3 mx-4 my-2.5 bg-elevated-1 border border-border-default/80 rounded-lg shadow-sm space-y-2">
@@ -335,16 +346,17 @@ export const IdolDetailDrawer: React.FC<IdolDetailDrawerProps> = ({
             )}
 
             {!journeyTrail && (
-              <p className="text-text-tertiary text-center py-4">
-                No recorded GPS trail loaded yet.
+              <p className="text-text-tertiary text-center py-4 text-[11px]">
+                No live journey telemetry recorded yet.
               </p>
             )}
 
             {journeyTrail && journeyTrail.length === 0 && (
-              <p className="text-text-tertiary text-center py-4">
-                No recorded GPS breadcrumbs found for this idol yet.
+              <p className="text-text-tertiary text-center py-4 text-[11px]">
+                No live journey telemetry recorded yet.
               </p>
             )}
+
 
             {journeyTrail && journeyTrail.length > 0 && (
               <div>

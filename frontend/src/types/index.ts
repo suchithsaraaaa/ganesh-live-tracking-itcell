@@ -65,6 +65,9 @@ export interface Idol {
   police_station: string;
   ps_code: string;
   address: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  geocoding_status?: string;
   idol_height: number | null;
   height_classification?: 'GREEN' | 'YELLOW' | 'RED' | 'SUBTHRESHOLD';
   is_operational_eligible?: boolean;
@@ -98,6 +101,8 @@ export interface ActiveMarker {
   ps_code: string;
   procession_state: ProcessionState;
   connection_state: ConnectionState;
+  is_origin_marker?: boolean;
+  geocoding_status?: string;
   latitude: number;
   longitude: number;
   speed: number | null;

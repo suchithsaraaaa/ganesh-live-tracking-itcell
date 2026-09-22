@@ -10,6 +10,13 @@ class ProcessionState(models.TextChoices):
     IMMERSION_COMPLETED = 'IMMERSION_COMPLETED', 'Immersion Completed'
 
 
+class GeocodingStatus(models.TextChoices):
+    NOT_GEOCODED = 'NOT_GEOCODED', 'Not Geocoded'
+    GEOCODED = 'GEOCODED', 'Geocoded (High Confidence)'
+    PARTIAL = 'PARTIAL', 'Partial / Low Confidence'
+    UNRESOLVED = 'UNRESOLVED', 'Unresolved'
+
+
 class Idol(models.Model):
     """
     Authoritative Idol master record.
@@ -39,6 +46,19 @@ class Idol(models.Model):
     instal_floor = models.CharField(max_length=50, blank=True)
     instal_village = models.CharField(max_length=255, blank=True)
     instal_pin = models.CharField(max_length=20, blank=True)
+
+    # Resolved Geographic Origin Coordinates
+    latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True, db_index=True)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True, db_index=True)
+    geocoding_status = models.CharField(
+        max_length=20,
+        choices=GeocodingStatus.choices,
+        default=GeocodingStatus.NOT_GEOCODED,
+        db_index=True
+    )
+    geocoded_at = models.DateTimeField(null=True, blank=True)
+    geocoding_provider = models.CharField(max_length=50, blank=True)
+    geocoding_confidence = models.CharField(max_length=50, blank=True)
 
     # Dimensions
     idol_height = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)

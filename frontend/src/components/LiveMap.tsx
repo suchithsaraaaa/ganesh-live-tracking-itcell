@@ -29,6 +29,14 @@ export function getMarkerHeightColor(marker: ActiveMarker): string {
 }
 
 function getStatusIndicator(marker: ActiveMarker): { pulse: string; badgeColor: string; label: string } {
+  if (marker.is_origin_marker) {
+    return {
+      pulse: '',
+      badgeColor: '#64748B', // Slate gray for static origin
+      label: 'ORIGIN ONLY',
+    };
+  }
+
   const isLive = marker.connection_state === 'LIVE';
   const isMoving = marker.procession_state === 'MOVING';
 
@@ -64,20 +72,30 @@ function createMarkerIcon(marker: ActiveMarker, isSelected: boolean = false): L.
   const heightColor = getMarkerHeightColor(marker);
   const status = getStatusIndicator(marker);
   const size = isSelected ? 38 : 30;
+  const isOrigin = !!marker.is_origin_marker;
+
+  const iconPath = isOrigin
+    ? '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>'
+    : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>';
+
+  const borderStyle = isSelected
+    ? '3px solid #FFFFFF'
+    : isOrigin
+    ? '2px dashed rgba(255,255,255,0.7)'
+    : '2px solid #0B0B0A';
 
   return L.divIcon({
     className: 'custom-leaflet-marker',
     html: `
       <div class="relative flex items-center justify-center" style="width: ${size}px; height: ${size}px;">
         ${status.pulse}
-        <div style="background-color: ${heightColor}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${isSelected ? '3px solid #FFFFFF' : '2px solid #0B0B0A'}; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);">
+        <div style="background-color: ${heightColor}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${borderStyle}; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);" title="${isOrigin ? 'Origin Location (Static)' : 'Live Telemetry'}">
           <svg style="width: ${size * 0.48}px; height: ${size * 0.48}px; color: white;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path>
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
+            ${iconPath}
           </svg>
         </div>
         <!-- Status indicator dot on bottom right -->
-        <span style="position: absolute; bottom: 0; right: 0; width: 9px; height: 9px; border-radius: 50%; background-color: ${status.badgeColor}; border: 1.5px solid #0B0B0A;"></span>
+        <span style="position: absolute; bottom: 0; right: 0; width: 9px; height: 9px; border-radius: 50%; background-color: ${status.badgeColor}; border: 1.5px solid #0B0B0A;" title="${status.label}"></span>
       </div>
     `,
     iconSize: [size, size],
@@ -85,6 +103,7 @@ function createMarkerIcon(marker: ActiveMarker, isSelected: boolean = false): L.
     popupAnchor: [0, -size / 2],
   });
 }
+
 
 function createHistoricalIcon(): L.DivIcon {
   return L.divIcon({
@@ -203,15 +222,16 @@ export const LiveMap: React.FC<LiveMapProps> = ({
             ${m.association_name || 'Individual Mandap'}
           </div>
           <div style="display: grid; grid-template-columns: auto auto; gap: 4px; color: #C7C4BC; font-size: 11px;">
+            <span style="color: #9C9890;">Type:</span> <span>${m.is_origin_marker ? '<span style="color: #94A3B8; font-weight:600;">Origin Location</span>' : '<span style="color: #10B981; font-weight:600;">Live Telemetry</span>'}</span>
             <span style="color: #9C9890;">Zone:</span> <span>${m.zone}</span>
             <span style="color: #9C9890;">Police Station:</span> <span>${m.police_station} (${m.ps_code})</span>
             <span style="color: #9C9890;">Constable:</span> <span>${m.assigned_constable?.name || 'Unassigned'}</span>
             <span style="color: #9C9890;">Procession:</span> <span style="font-weight: 600; color: #F2EFE9;">${m.procession_state}</span>
-            <span style="color: #9C9890;">Freshness:</span> <span style="font-weight: 600; color: ${m.connection_state === 'LIVE' ? '#10B981' : '#F59E0B'};">${m.connection_state}</span>
+            <span style="color: #9C9890;">Freshness:</span> <span style="font-weight: 600; color: ${m.is_origin_marker ? '#94A3B8' : m.connection_state === 'LIVE' ? '#10B981' : '#F59E0B'};">${m.is_origin_marker ? 'NOT TRACKED' : m.connection_state}</span>
             ${m.immersion_date ? `<span style="color: #9C9890;">Immersion:</span> <span>${m.immersion_date}</span>` : ''}
           </div>
           <div style="margin-top: 6px; font-size: 10px; color: #6B675F; text-align: right;">
-            GPS: ${new Date(m.last_gps_timestamp).toLocaleTimeString()}
+            ${m.is_origin_marker ? 'Static Geocoded Coordinate' : `GPS: ${new Date(m.last_gps_timestamp).toLocaleTimeString()}`}
           </div>
         </div>
       `;
@@ -227,6 +247,16 @@ export const LiveMap: React.FC<LiveMapProps> = ({
 
     if (selectedMarker) {
       map.setView([selectedMarker.latitude, selectedMarker.longitude], 15, { animate: true });
+    } else if (displayMarkers.length > 0) {
+      const validPoints: [number, number][] = displayMarkers
+        .filter((m) => typeof m.latitude === 'number' && typeof m.longitude === 'number' && !isNaN(m.latitude) && !isNaN(m.longitude))
+        .map((m) => [m.latitude, m.longitude] as [number, number]);
+      if (validPoints.length > 0) {
+        const bounds = L.latLngBounds(validPoints);
+        if (bounds.isValid()) {
+          map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+        }
+      }
     }
   }, [markers, selectedMarker, onSelectMarker]);
 
@@ -289,13 +319,25 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     <div className="relative w-full h-full flex-1">
       <div ref={mapContainerRef} className="w-full h-full" />
 
+      {/* Honest Empty State Overlay */}
+      {markers.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center bg-base/60 backdrop-blur-sm z-[999] pointer-events-none">
+          <div className="p-4 bg-elevated-1 border border-border-default rounded-lg text-center max-w-sm pointer-events-auto shadow-2xl">
+            <p className="text-sm font-semibold text-text-primary mb-1">No Idols Plotted</p>
+            <p className="text-xs text-text-secondary">
+              No eligible (15+ ft) idols with valid geographic coordinates match the selected filters.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Floating Single-Selection Banner */}
       {selectedMarker && (
         <div className="absolute top-3 left-3 z-[1000] bg-elevated/95 border border-accent/40 rounded-lg p-3 shadow-xl backdrop-blur max-w-sm flex items-start justify-between">
           <div>
             <div className="flex items-center space-x-2">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-accent">
-                Isolated Tracking Mode
+                {selectedMarker.is_origin_marker ? 'Static Origin Mode' : 'Isolated Tracking Mode'}
               </span>
               <span
                 className="text-[9px] font-bold px-1.5 py-0.5 rounded border"
@@ -316,7 +358,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
             </div>
             <div className="text-[11px] text-text-tertiary mt-1">
               Procession: <span className="font-semibold text-text-primary">{selectedMarker.procession_state}</span>
-              &nbsp;&bull;&nbsp; Freshness: <span className="font-semibold text-text-secondary">{selectedMarker.connection_state}</span>
+              &nbsp;&bull;&nbsp; Type: <span className="font-semibold text-text-secondary">{selectedMarker.is_origin_marker ? 'Origin Location' : selectedMarker.connection_state}</span>
             </div>
           </div>
           <button
@@ -329,7 +371,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
         </div>
       )}
 
-      {/* Compact Operational Map Legend (Rule 12) */}
+      {/* Compact Operational Map Legend */}
       <div className="absolute bottom-4 left-4 z-[1000] bg-elevated/90 border border-border-default/60 backdrop-blur-md rounded-md p-2.5 shadow-xl text-[11px] pointer-events-auto">
         <div className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">
           Idol Height
@@ -337,19 +379,19 @@ export const LiveMap: React.FC<LiveMapProps> = ({
         <div className="flex flex-col gap-1 mb-2">
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-[#10B981] shrink-0" />
-            <span className="text-text-primary">15–20 FT (Green)</span>
+            <span className="text-text-primary font-medium">15–20 FT (Green)</span>
           </div>
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-[#F59E0B] shrink-0" />
-            <span className="text-text-primary">21–25 FT (Yellow)</span>
+            <span className="text-text-primary font-medium">21–25 FT (Yellow)</span>
           </div>
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444] shrink-0" />
-            <span className="text-text-primary">26+ FT (Red)</span>
+            <span className="text-text-primary font-medium">26+ FT (Red)</span>
           </div>
         </div>
         <div className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5 pt-1.5 border-t border-border-subtle">
-          Telemetry Freshness
+          Telemetry & Markers
         </div>
         <div className="flex flex-col gap-1">
           <div className="flex items-center space-x-2">
@@ -363,6 +405,10 @@ export const LiveMap: React.FC<LiveMapProps> = ({
           <div className="flex items-center space-x-2">
             <span className="w-2 h-2 rounded-full bg-stone-500 shrink-0" />
             <span className="text-text-secondary">OFFLINE</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0 border border-white/40" />
+            <span className="text-text-secondary font-medium">ORIGIN ONLY (Not Tracked)</span>
           </div>
         </div>
       </div>

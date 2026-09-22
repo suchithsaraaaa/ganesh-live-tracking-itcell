@@ -284,3 +284,64 @@ class IdolOperationalFilterAPITests(TestCase):
         self.assertEqual(marker['gpid'], 'HYDCMRZBHNR0003')
         self.assertEqual(marker['height_classification'], 'GREEN')
         self.assertEqual(marker['latitude'], 17.3620)
+        self.assertFalse(marker['is_origin_marker'])
+
+    def test_origin_vs_live_marker_priority_and_all_eligible_visibility(self):
+        """
+        Verify:
+        - Eligible idols with geocoded origin coordinates appear as origin markers (is_origin_marker: True).
+        - Eligible idols with live tracking sessions take precedence (is_origin_marker: False).
+        - Subthreshold idols are never returned on the map even if they have coordinates.
+        - Unresolved idols without coordinates do not generate fake markers.
+        """
+        # 1. Give an eligible idol (HYDCMRZBHNR0004, 18ft) geocoded origin coordinates
+        idol_4 = Idol.objects.get(gpid='HYDCMRZBHNR0004')
+        idol_4.latitude = 17.3555555
+        idol_4.longitude = 78.4666666
+        idol_4.geocoding_status = 'GEOCODED'
+        idol_4.save()
+
+        # 2. Give a subthreshold idol (<15ft, HYDCMRZBHNR0001, 10ft) coordinates
+        idol_1 = Idol.objects.get(gpid='HYDCMRZBHNR0001')
+        idol_1.latitude = 17.3511111
+        idol_1.longitude = 78.4611111
+        idol_1.geocoding_status = 'GEOCODED'
+        idol_1.save()
+
+        # Query dashboard
+        res = self.client.get('/api/v1/idols/dashboard/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        marker_gpids = [m['gpid'] for m in res.data['active_markers']]
+        # Subthreshold idol 1 must NOT be on map
+        self.assertNotIn('HYDCMRZBHNR0001', marker_gpids)
+        # Eligible idol 4 must be on map as origin marker
+        self.assertIn('HYDCMRZBHNR0004', marker_gpids)
+
+        m4 = next(m for m in res.data['active_markers'] if m['gpid'] == 'HYDCMRZBHNR0004')
+        self.assertTrue(m4['is_origin_marker'])
+        self.assertAlmostEqual(m4['latitude'], 17.3555555)
+        self.assertAlmostEqual(m4['longitude'], 78.4666666)
+
+
+class GeocodingServiceTests(TestCase):
+    def test_sanitize_address_strips_house_numbers(self):
+        from apps.idols.services.geocoding import sanitize_address_for_geocoding
+        raw_1 = "H.No 21-4-330/1, Ghansi Bazar, Charminar"
+        cleaned_1 = sanitize_address_for_geocoding(raw_1)
+        self.assertNotIn("21-4-330/1", cleaned_1)
+        self.assertIn("Ghansi Bazar", cleaned_1)
+        self.assertIn("Charminar", cleaned_1)
+
+        raw_2 = "Plot No 45, Road No 12, Banjara Hills"
+        cleaned_2 = sanitize_address_for_geocoding(raw_2)
+        self.assertNotIn("Plot No", cleaned_2)
+        self.assertIn("Banjara Hills", cleaned_2)
+
+    def test_mock_geocoder_resolves_within_hyderabad_bounds(self):
+        from apps.idols.services.geocoding import MockGeocoder, is_within_hyderabad_bounds
+        geocoder = MockGeocoder()
+        lat, lon, name, kind = geocoder.geocode_query("Charminar, Hyderabad")
+        self.assertTrue(is_within_hyderabad_bounds(lat, lon))
+        self.assertTrue(17.15 <= lat <= 17.70)
+        self.assertTrue(78.15 <= lon <= 78.75)

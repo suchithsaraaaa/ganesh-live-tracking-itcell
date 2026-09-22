@@ -150,8 +150,13 @@ class DashboardStatsView(APIView):
         h_21_25 = qs.filter(idol_height__gte=21, idol_height__lt=26).count()
         h_26_plus = qs.filter(idol_height__gte=26).count()
 
-        # Query active tracking sessions for map markers:
-        # Enforce ONE GPID = ONE MARKER by tracking seen_gpids
+        from apps.assignments.models import Assignment
+        active_assignments_by_idol = {
+            a.idol_id: a.constable
+            for a in Assignment.objects.filter(idol__in=qs, is_active=True).select_related('constable')
+        }
+
+        # Query active tracking sessions for map markers (priority live telemetry)
         active_sessions = TrackingSession.objects.filter(
             assignment__idol__in=qs,
             status=TrackingSessionStatus.ACTIVE
@@ -163,6 +168,7 @@ class DashboardStatsView(APIView):
 
         can_view_contact = request.user.role in ['MAIN_OFFICER', 'ACP', 'SHO']
 
+        # 1. Process active tracking sessions (live telemetry priority)
         for sess in active_sessions:
             idol = sess.assignment.idol
             if idol.gpid in seen_gpids:
@@ -189,6 +195,7 @@ class DashboardStatsView(APIView):
                     'ps_code': idol.ps_code,
                     'procession_state': idol.procession_state,
                     'connection_state': conn_state,
+                    'is_origin_marker': False,
                     'latitude': latest_pt.latitude,
                     'longitude': latest_pt.longitude,
                     'speed': latest_pt.speed,
@@ -208,6 +215,80 @@ class DashboardStatsView(APIView):
                         'phone_number': constable.phone_number if can_view_contact else None
                     }
                 })
+            elif idol.latitude is not None and idol.longitude is not None:
+                height_val = float(idol.idol_height) if idol.idol_height is not None else None
+                active_markers.append({
+                    'id': idol.id,
+                    'gpid': idol.gpid,
+                    'idol_name': idol.name or idol.association_name or 'Idol',
+                    'association_name': idol.association_name,
+                    'zone': idol.zone,
+                    'division': idol.division,
+                    'police_station': idol.police_station,
+                    'ps_code': idol.ps_code,
+                    'procession_state': idol.procession_state,
+                    'connection_state': 'OFFLINE',
+                    'is_origin_marker': True,
+                    'latitude': float(idol.latitude),
+                    'longitude': float(idol.longitude),
+                    'speed': None,
+                    'heading': None,
+                    'accuracy': None,
+                    'last_gps_timestamp': idol.updated_at,
+                    'idol_height': height_val,
+                    'height_classification': get_height_classification(height_val),
+                    'immersion_date': str(idol.immersion_date) if idol.immersion_date else None,
+                    'origin_location': idol.address or idol.instal_street or idol.instal_village or 'N/A',
+                    'destination': idol.river_name or idol.lake_type or 'Visarjan Site',
+                    'owner_name': idol.name or idol.association_name or 'N/A',
+                    'assigned_constable': {
+                        'id': constable.id,
+                        'name': constable.get_full_name() or constable.username,
+                        'police_id': constable.police_id,
+                        'phone_number': constable.phone_number if can_view_contact else None
+                    }
+                })
+
+        # 2. Add all other eligible idols with valid geocoded origin coordinates (Rule 17)
+        for idol in qs.filter(latitude__isnull=False, longitude__isnull=False):
+            if idol.gpid in seen_gpids:
+                continue
+            seen_gpids.add(idol.gpid)
+
+            constable = active_assignments_by_idol.get(idol.id)
+            height_val = float(idol.idol_height) if idol.idol_height is not None else None
+
+            active_markers.append({
+                'id': idol.id,
+                'gpid': idol.gpid,
+                'idol_name': idol.name or idol.association_name or 'Idol',
+                'association_name': idol.association_name,
+                'zone': idol.zone,
+                'division': idol.division,
+                'police_station': idol.police_station,
+                'ps_code': idol.ps_code,
+                'procession_state': idol.procession_state,
+                'connection_state': 'OFFLINE',
+                'is_origin_marker': True,
+                'latitude': float(idol.latitude),
+                'longitude': float(idol.longitude),
+                'speed': None,
+                'heading': None,
+                'accuracy': None,
+                'last_gps_timestamp': idol.updated_at,
+                'idol_height': height_val,
+                'height_classification': get_height_classification(height_val),
+                'immersion_date': str(idol.immersion_date) if idol.immersion_date else None,
+                'origin_location': idol.address or idol.instal_street or idol.instal_village or 'N/A',
+                'destination': idol.river_name or idol.lake_type or 'Visarjan Site',
+                'owner_name': idol.name or idol.association_name or 'N/A',
+                'assigned_constable': {
+                    'id': constable.id,
+                    'name': constable.get_full_name() or constable.username,
+                    'police_id': constable.police_id,
+                    'phone_number': constable.phone_number if can_view_contact else None
+                } if constable else None
+            })
 
         return Response({
             'kpis': {

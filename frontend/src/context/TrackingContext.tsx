@@ -134,10 +134,14 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (existing) {
       setSelectedMarker(existing);
     } else {
+      const heightVal = idol.idol_height ? Number(idol.idol_height) : null;
+      const heightCat =
+        heightVal && heightVal >= 26 ? 'RED' : heightVal && heightVal >= 21 ? 'YELLOW' : 'GREEN';
+
       const syntheticMarker: ActiveMarker = {
         id: idol.id,
         gpid: idol.gpid,
-        idol_name: idol.name,
+        idol_name: idol.name || idol.association_name || 'Idol',
         association_name: idol.association_name,
         zone: idol.zone,
         division: idol.division,
@@ -145,18 +149,26 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         ps_code: idol.ps_code,
         procession_state: idol.procession_state,
         connection_state: 'OFFLINE',
-        latitude: 17.3850,
-        longitude: 78.4867,
+        is_origin_marker: true,
+        latitude: idol.latitude ? Number(idol.latitude) : 17.3850,
+        longitude: idol.longitude ? Number(idol.longitude) : 78.4867,
         speed: null,
         heading: null,
         accuracy: null,
         last_gps_timestamp: idol.updated_at,
+        idol_height: heightVal,
+        height_classification: heightCat,
+        immersion_date: idol.immersion_date,
+        origin_location: idol.address,
+        destination: idol.river_name || idol.lake_type,
+        owner_name: idol.name,
         assigned_constable: null,
       };
       setSelectedMarker(syntheticMarker);
     }
     setIsDrawerOpen(true);
   }, [activeMarkers]);
+
 
   const handleToggleJourney = useCallback(async (gpid: string) => {
     if (journeyTrail) {
