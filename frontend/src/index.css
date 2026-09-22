@@ -1,0 +1,93 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+:root {
+  --bg-primary: #0b1120;
+  --bg-card: #131c31;
+  --bg-card-hover: #1e293b;
+  --border-color: #1e2e4a;
+  --accent-blue: #2563eb;
+  --accent-gold: #d97706;
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  --status-moving: #10b981;
+  --status-holding: #f59e0b;
+  --status-tracking: #3b82f6;
+  --status-visarjan: #8b5cf6;
+  --status-done: #64748b;
+  --status-live: #059669;
+  --status-degraded: #d97706;
+  --status-offline: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Leaflet Dark Map Overrides */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  background: #0f172a !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #1e293b !important;
+  color: #f8fafc !important;
+  border-radius: 6px !important;
+  border: 1px solid #334155 !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5) !important;
+  padding: 0 !important;
+}
+
+.leaflet-popup-content {
+  margin: 0 !important;
+  padding: 12px !important;
+}
+
+.leaflet-popup-tip {
+  background: #1e293b !important;
+}
+
+/* Pulse animation for live indicators */
+@keyframes pulse-live {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.live-pulse {
+  animation: pulse-live 2s infinite ease-in-out;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', monospace;
+}

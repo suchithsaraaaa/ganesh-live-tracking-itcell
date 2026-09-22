@@ -1,0 +1,206 @@
+# ==============================================================================
+# Hyderabad Police Ganesh Visarjan Live Tracking System - Repository .gitignore
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. SECRETS AND CREDENTIALS
+# ------------------------------------------------------------------------------
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore
+secrets/
+credentials/
+*.secret
+idols.json
+
+
+# AWS credentials & configuration
+.aws/
+.aws/credentials
+.aws/config
+
+# ------------------------------------------------------------------------------
+# 2. PYTHON / DJANGO
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+*.egg
+*.egg-info/
+dist/
+build/
+develop-eggs/
+.eggs/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.manifest
+*.spec
+
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.ruff_cache/
+
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Django local runtime & database files
+*.log
+local_settings.py
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
+db.sqlite3
+db.sqlite3-journal
+db.sqlite3-shm
+db.sqlite3-wal
+
+# NOTE: Django database migration files (migrations/) are intentionally TRACKED.
+
+# ------------------------------------------------------------------------------
+# 3. REACT / NODE / VITE
+# ------------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+.npm/
+.yarn/
+.pnpm-store/
+
+dist/
+build/
+.vite/
+.cache/
+
+*.tsbuildinfo
+
+# NOTE: package.json, package-lock.json, and frontend source files are intentionally TRACKED.
+
+# ------------------------------------------------------------------------------
+# 4. ANDROID / KOTLIN
+# ------------------------------------------------------------------------------
+.gradle/
+*.iml
+local.properties
+
+build/
+*/build/
+
+.cxx/
+.externalNativeBuild/
+
+captures/
+
+# Generated APK/AAB packages
+*.apk
+*.aab
+
+# NOTE: Gradle wrapper (gradlew, gradlew.bat, gradle/wrapper/) must remain TRACKED.
+
+# ------------------------------------------------------------------------------
+# 5. DOCKER
+# ------------------------------------------------------------------------------
+docker-compose.override.yml
+*.pid
+*.sock
+
+# NOTE: Dockerfile, docker-compose.yml, docker-compose.prod.yml are intentionally TRACKED.
+
+# ------------------------------------------------------------------------------
+# 6. LOGS & RUNTIME FILES
+# ------------------------------------------------------------------------------
+*.log
+logs/
+*.pid
+*.pid.lock
+
+runtime/
+tmp/
+temp/
+
+# ------------------------------------------------------------------------------
+# 7. OS & EDITOR FILES
+# ------------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+.idea/
+*.swp
+*.swo
+*~
+
+# ------------------------------------------------------------------------------
+# 8. DATABASE & LOCAL DATA EXPORTS
+# ------------------------------------------------------------------------------
+*.dump
+*.sql.gz
+
+# NOTE: Authoritative source dataset in data/ is preserved for project operations.
+
+# ------------------------------------------------------------------------------
+# 9. GENERATED REPORTS & RUNTIME USER UPLOADS
+# ------------------------------------------------------------------------------
+media/
+staticfiles/
+uploads/
+generated_reports/
+
+# ------------------------------------------------------------------------------
+# 10. AWS & CLOUD DEPLOYMENT
+# ------------------------------------------------------------------------------
+*.pem
+*.ppk
+
+# Terraform state
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# ------------------------------------------------------------------------------
+# 11. TEST & COVERAGE OUTPUT
+# ------------------------------------------------------------------------------
+coverage/
+test-results/
+playwright-report/
+test-output/
+
+# ------------------------------------------------------------------------------
+# 12. IDE & LOCAL TOOL GENERATED FILES
+# ------------------------------------------------------------------------------
+scratch/
