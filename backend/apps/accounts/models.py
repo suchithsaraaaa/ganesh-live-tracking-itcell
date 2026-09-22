@@ -23,9 +23,13 @@ CANONICAL_PERMISSIONS = [
     'assign_field_officers',
     'create_assignments',
     'reassign_assignments',
+    'manage_assignments',
+    'handover_duty',
+    'ingest_telemetry',
     'view_officer_locations',
     'manage_users',
     'manage_permissions',
+    'manage_geography',
     'export_reports',
 ]
 
