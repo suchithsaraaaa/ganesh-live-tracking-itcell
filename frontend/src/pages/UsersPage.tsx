@@ -13,6 +13,7 @@ import {
   Trash2,
   Eye,
   EyeOff,
+  RotateCcw,
 } from 'lucide-react';
 import {
   fetchUsers,
@@ -415,107 +416,117 @@ export const UsersPage: React.FC = () => {
 
       {/* Filter / Control Bar */}
       <div className="px-6 py-3 bg-base border-b border-border-subtle shrink-0">
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 items-end">
-          {/* Search */}
-          <div className="lg:col-span-2">
-            <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
-              Search Officers
-            </label>
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search name, username, police ID, PS…"
-                className="w-full pl-8 pr-3 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent"
-              />
+        <div className="space-y-2.5">
+          {/* Row 1: Search & Zone */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 items-end">
+            <div className="md:col-span-2">
+              <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
+                Search Officers
+              </label>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search name, username, police ID, PS…"
+                  className="w-full pl-8 pr-3 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
+                Zone
+              </label>
+              <select
+                value={selectedZone}
+                onChange={(e) => handleZoneFilterChange(e.target.value)}
+                className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent cursor-pointer"
+              >
+                <option value="All Zones">All Zones</option>
+                {availableZones.map((z) => (
+                  <option key={z} value={z}>
+                    {z}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
-          {/* Zone Filter */}
-          <div>
-            <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
-              Zone
-            </label>
-            <select
-              value={selectedZone}
-              onChange={(e) => handleZoneFilterChange(e.target.value)}
-              className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent"
-            >
-              <option value="All Zones">All Zones</option>
-              {availableZones.map((z) => (
-                <option key={z} value={z}>
-                  {z}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Row 2: Police Station, Officer Level / Role, Status, Clear Filters */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5 items-end">
+            {/* Police Station Filter (Cascading) */}
+            <div>
+              <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
+                Police Station
+              </label>
+              <select
+                value={selectedStation}
+                onChange={(e) => setSelectedStation(e.target.value)}
+                className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent cursor-pointer"
+              >
+                <option value="All Police Stations">All Police Stations</option>
+                {availableStations.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          {/* Police Station Filter (Cascading) */}
-          <div>
-            <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
-              Police Station
-            </label>
-            <select
-              value={selectedStation}
-              onChange={(e) => setSelectedStation(e.target.value)}
-              className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent"
-            >
-              <option value="All Police Stations">All Police Stations</option>
-              {availableStations.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </div>
+            {/* Officer Level / Role Filter */}
+            <div>
+              <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
+                Officer Level / Role
+              </label>
+              <select
+                value={roleFilter}
+                onChange={(e) => setRoleFilter(e.target.value)}
+                aria-label="Filter by Officer Level"
+                className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent cursor-pointer"
+              >
+                <option value="ALL">All Roles / Levels</option>
+                <option value="MAIN_OFFICER">Main Officer / Admin</option>
+                <option value="ACP">ACP / Senior Officer</option>
+                <option value="SHO">SHO / Station Officer</option>
+                <option value="CONSTABLE">Constable / Ground Staff</option>
+              </select>
+            </div>
 
-          {/* Officer Level / Role Filter */}
-          <div>
-            <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
-              Officer Level / Role
-            </label>
-            <select
-              value={roleFilter}
-              onChange={(e) => setRoleFilter(e.target.value)}
-              aria-label="Filter by Officer Level"
-              className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent"
-            >
-              <option value="ALL">All Officer Levels</option>
-              <option value="MAIN_OFFICER">Main Officer / Admin</option>
-              <option value="ACP">ACP / Senior Officer</option>
-              <option value="SHO">SHO / Station Officer</option>
-              <option value="CONSTABLE">Constable / Ground Staff</option>
-            </select>
-          </div>
-
-          {/* Status Filter */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-[10px] uppercase font-bold text-text-tertiary">
+            {/* Status Filter */}
+            <div>
+              <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
                 Status
               </label>
-              {isFiltered && (
-                <button
-                  onClick={handleClearFilters}
-                  className="text-[10px] text-accent hover:underline flex items-center gap-0.5 cursor-pointer"
-                  title="Clear all active filters"
-                >
-                  <X className="w-3 h-3" />
-                  <span>Clear</span>
-                </button>
-              )}
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                aria-label="Filter by Status"
+                className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent cursor-pointer"
+              >
+                <option value="ALL">All Status</option>
+                <option value="ACTIVE">Active Only</option>
+                <option value="INACTIVE">Disabled Only</option>
+              </select>
             </div>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              aria-label="Filter by Status"
-              className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent"
-            >
-              <option value="ALL">All Status</option>
-              <option value="ACTIVE">Active Only</option>
-              <option value="INACTIVE">Disabled Only</option>
-            </select>
+
+            {/* Clear Filters Button */}
+            <div>
+              <button
+                type="button"
+                onClick={handleClearFilters}
+                disabled={!isFiltered}
+                className={`w-full py-1.5 px-3 rounded text-xs font-semibold border flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                  isFiltered
+                    ? 'bg-accent/15 border-accent/40 text-accent hover:bg-accent/25'
+                    : 'bg-elevated/40 border-border-subtle text-text-tertiary cursor-not-allowed opacity-40'
+                }`}
+                title="Reset all filters to default"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Clear Filters</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -555,9 +566,10 @@ export const UsersPage: React.FC = () => {
             )}
             <button
               onClick={handleClearFilters}
-              className="text-[11px] text-text-tertiary hover:text-text-primary underline ml-auto cursor-pointer"
+              className="text-[11px] text-accent hover:underline ml-auto cursor-pointer flex items-center gap-1"
             >
-              Clear all filters
+              <RotateCcw className="w-3 h-3" />
+              <span>Clear Filters</span>
             </button>
           </div>
         )}
