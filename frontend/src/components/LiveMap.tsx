@@ -244,6 +244,8 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     const layerGroup = L.layerGroup().addTo(map);
     markersLayerRef.current = layerGroup;
     mapInstanceRef.current = map;
+    (mapContainerRef.current as any)._leaflet_map = map;
+    (window as any).__LEAFLET_MAP__ = map;
 
     // Event listeners to detect manual user interaction
     // Once the user zooms, drags, or moves the map, polling updates NEVER override the viewport!
@@ -262,6 +264,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     });
 
     return () => {
+      delete (window as any).__LEAFLET_MAP__;
       map.remove();
       mapInstanceRef.current = null;
       markersLayerRef.current = null;
