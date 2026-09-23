@@ -218,6 +218,17 @@ export async function handoverAssignment(assignmentId: number, newConstableId: n
   return data;
 }
 
+export async function endAssignment(assignmentId: number, reason?: string): Promise<{ message: string; assignment: Assignment }> {
+  const res = await apiFetch(`/assignments/${assignmentId}/end/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason: reason || '' }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.error || 'Failed to end assignment', res.status);
+  return data;
+}
+
 // ---------------------------------------------------------------------------
 // User Management (Administrative)
 // ---------------------------------------------------------------------------

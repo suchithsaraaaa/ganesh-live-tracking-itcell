@@ -120,6 +120,7 @@ class IdolEventType(models.TextChoices):
     TRACKING_STOPPED = 'TRACKING_STOPPED', 'Tracking Stopped'
     ASSIGNMENT_CREATED = 'ASSIGNMENT_CREATED', 'Assignment Created'
     ASSIGNMENT_HANDOVER = 'ASSIGNMENT_HANDOVER', 'Assignment Handover'
+    ASSIGNMENT_ENDED = 'ASSIGNMENT_ENDED', 'Assignment Ended'
     ZONE_ENTERED = 'ZONE_ENTERED', 'Zone Entered'
     HOLDING_POINT_ENTERED = 'HOLDING_POINT_ENTERED', 'Holding Point Entered'
     HOLDING_POINT_EXITED = 'HOLDING_POINT_EXITED', 'Holding Point Exited'

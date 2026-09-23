@@ -5,9 +5,9 @@ from apps.idols.models import Idol
 
 
 class AssignmentSerializer(serializers.ModelSerializer):
-    constable_name = serializers.CharField(source='constable.get_full_name', read_only=True)
-    constable_username = serializers.CharField(source='constable.username', read_only=True)
-    constable_police_id = serializers.CharField(source='constable.police_id', read_only=True)
+    constable_name = serializers.SerializerMethodField()
+    constable_username = serializers.SerializerMethodField()
+    constable_police_id = serializers.SerializerMethodField()
     idol_gpid = serializers.CharField(source='idol.gpid', read_only=True)
     idol_name = serializers.CharField(source='idol.name', read_only=True)
     police_station = serializers.CharField(source='idol.police_station', read_only=True)
@@ -33,6 +33,21 @@ class AssignmentSerializer(serializers.ModelSerializer):
             'created_at',
         ]
         read_only_fields = ['started_at', 'ended_at', 'is_active', 'handover_to', 'assigned_by']
+
+    def get_constable_name(self, obj):
+        if obj.constable:
+            return obj.constable.get_full_name() or obj.constable.username
+        return obj.officer_name_snapshot or 'Historical Officer'
+
+    def get_constable_username(self, obj):
+        if obj.constable:
+            return obj.constable.username
+        return obj.officer_name_snapshot or 'Historical Officer'
+
+    def get_constable_police_id(self, obj):
+        if obj.constable:
+            return obj.constable.police_id or ''
+        return obj.police_id_snapshot or ''
 
 
 class CreateAssignmentSerializer(serializers.Serializer):

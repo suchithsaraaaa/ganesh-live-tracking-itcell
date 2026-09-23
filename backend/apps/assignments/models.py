@@ -171,6 +171,60 @@ class Assignment(models.Model):
 
         return new_assignment
 
+    @transaction.atomic
+    def end_assignment(self, actor=None, reason=''):
+        """
+        Safely ends an active assignment without deleting historical records.
+        Preserves officer snapshot and logs operational & audit events.
+        """
+        now = timezone.now()
+        self.is_active = False
+        self.ended_at = now
+        if reason:
+            self.handover_reason = f"Ended: {reason}"
+        self.save(update_fields=['is_active', 'ended_at', 'handover_reason', 'updated_at'])
+
+        try:
+            from apps.tracking.models import IdolEvent, IdolEventType
+            IdolEvent.objects.create(
+                idol=self.idol,
+                gpid=self.idol.gpid,
+                event_type=IdolEventType.ASSIGNMENT_ENDED,
+                timestamp=now,
+                zone=self.idol.zone,
+                actor=actor,
+                metadata={
+                    'assignment_id': self.id,
+                    'constable': self._constable_display(),
+                    'police_id': self.police_id_snapshot,
+                    'ended_by': actor.username if actor else 'System',
+                    'reason': reason or 'Assignment ended'
+                }
+            )
+        except Exception:
+            pass
+
+        try:
+            from apps.audit.models import AuditEvent
+            AuditEvent.objects.create(
+                action='ASSIGNMENT_ENDED',
+                actor=actor,
+                target_id=str(self.id),
+                target_model='Assignment',
+                details={
+                    'assignment_id': self.id,
+                    'gpid': self.idol.gpid,
+                    'constable': self._constable_display(),
+                    'police_id': self.police_id_snapshot,
+                    'ended_by': actor.username if actor else 'System',
+                    'reason': reason
+                }
+            )
+        except Exception:
+            pass
+
+        return self
+
     @classmethod
     def get_constable_for_idol_at(cls, idol, dt):
         """

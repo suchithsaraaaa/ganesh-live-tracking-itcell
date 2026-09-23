@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import Assignment
 from .serializers import AssignmentSerializer, CreateAssignmentSerializer, HandoverSerializer
-from common.permissions import IsStationOfficerOrAbove, filter_by_jurisdiction
+from common.permissions import IsStationOfficerOrAbove, CanAssignFieldOfficers, filter_by_jurisdiction
 
 
 class AssignmentListView(generics.ListAPIView):
@@ -116,3 +116,74 @@ class CurrentAssignmentView(APIView):
                 'started_at': assignment.started_at,
             }
         })
+
+
+class EndAssignmentView(APIView):
+    """
+    Safely ends an active assignment without deleting historical records.
+    Enforces RBAC/jurisdiction: restricted to Station Officer or above.
+    Enforces active tracking session safety: if an active TrackingSession exists,
+    blocks ending with 400 and clear explanation to stop the procession first.
+    """
+    permission_classes = [CanAssignFieldOfficers]
+
+    def post(self, request, pk):
+        try:
+            assignment = Assignment.objects.select_related('idol', 'constable').get(pk=pk)
+        except Assignment.DoesNotExist:
+            return Response(
+                {'error': 'Assignment not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if not assignment.is_active:
+            return Response(
+                {'error': 'Assignment is already ended.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Enforce server-side jurisdiction
+        user = request.user
+        if not (user.is_superuser or user.role == 'MAIN_OFFICER'):
+            if user.role == 'ACP':
+                if user.zone and assignment.idol.zone and assignment.idol.zone.lower() != user.zone.lower():
+                    return Response(
+                        {'error': 'You do not have jurisdiction to end assignments in this zone.'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            elif user.role == 'SHO':
+                if user.police_station and assignment.idol.police_station and assignment.idol.police_station.lower() != user.police_station.lower():
+                    return Response(
+                        {'error': 'You do not have jurisdiction to end assignments in this police station.'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            else:
+                return Response({'error': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Active tracking session safety check
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus
+        active_session = TrackingSession.objects.filter(
+            assignment=assignment,
+            status__in=[TrackingSessionStatus.ACTIVE, TrackingSessionStatus.STARTED]
+        ).first()
+
+        if active_session:
+            return Response(
+                {
+                    'error': 'This officer currently has an active tracking session. Stop the procession before ending the assignment.',
+                    'has_active_tracking': True,
+                    'tracking_session_id': active_session.id
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        reason = request.data.get('reason', '')
+        ended_assignment = assignment.end_assignment(actor=request.user, reason=reason)
+
+        return Response(
+            {
+                'message': 'Assignment ended successfully.',
+                'assignment': AssignmentSerializer(ended_assignment).data
+            },
+            status=status.HTTP_200_OK
+        )
