@@ -612,3 +612,286 @@ class OfficerCreationCascadingTests(TestCase):
         self.assertNotIn('pc_bjrh_test', usernames)
 
 
+class UserManagementFilteringAndAdminPasswordTests(TestCase):
+    def setUp(self):
+        from apps.geography.models import PoliceStationBoundary
+        self.client = APIClient()
+
+        # Admin user
+        self.admin = User.objects.create_user(
+            username='admin_main', password='adminpassword123',
+            role=UserRole.MAIN_OFFICER, first_name='Admin', last_name='Officer'
+        )
+
+        # ACP user with manage_users permission
+        self.acp_charminar = User.objects.create_user(
+            username='acp_cmr_filter', password='password123',
+            role=UserRole.ACP, zone='Charminar', division='Charminar',
+            first_name='ACP', last_name='Charminar',
+            custom_permissions=['manage_users']
+        )
+
+        # SHO users
+        self.sho_chaderghat = User.objects.create_user(
+            username='sho_chaderghat', password='password123',
+            role=UserRole.SHO, zone='Charminar', police_station='Chaderghat',
+            first_name='SHO', last_name='Chaderghat'
+        )
+        self.sho_banjara = User.objects.create_user(
+            username='sho_banjara', password='password123',
+            role=UserRole.SHO, zone='Jubilee Hills', police_station='Banjara Hills',
+            first_name='SHO', last_name='Banjara'
+        )
+
+        # Constables
+        self.pc_active = User.objects.create_user(
+            username='android1', password='password123',
+            role=UserRole.CONSTABLE, zone='Charminar', police_station='Chaderghat',
+            police_id='PC-1001', is_active=True, first_name='Ravi', last_name='Kumar',
+            phone_number='9876500001'
+        )
+        self.pc_inactive = User.objects.create_user(
+            username='pc_inactive_cmr', password='password123',
+            role=UserRole.CONSTABLE, zone='Charminar', police_station='Chaderghat',
+            police_id='PC-1002', is_active=False, first_name='Suresh', last_name='Rao',
+            phone_number='9876500002'
+        )
+        self.pc_banjara = User.objects.create_user(
+            username='pc_banjara_active', password='password123',
+            role=UserRole.CONSTABLE, zone='Jubilee Hills', police_station='Banjara Hills',
+            police_id='PC-2001', is_active=True, first_name='Mahesh', last_name='Reddy',
+            phone_number='9876500003'
+        )
+
+        # Boundaries
+        PoliceStationBoundary.objects.create(
+            ps_name='Chaderghat', ps_code='CDGT', zone='Charminar', division='Charminar'
+        )
+        PoliceStationBoundary.objects.create(
+            ps_name='Banjara Hills', ps_code='BJRH', zone='Jubilee Hills', division='Banjara Hills'
+        )
+
+    # 1. No filters -> returns all authorized accounts and correct counts
+    def test_no_filters_returns_all_users_and_counts(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/v1/auth/users/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['count'], 7)
+        self.assertEqual(res.data['total_count'], 7)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertIn('admin_main', usernames)
+        self.assertIn('android1', usernames)
+        self.assertIn('pc_inactive_cmr', usernames)
+
+    # 2. Zone filter
+    def test_zone_filter(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/v1/auth/users/?zone=Charminar')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertEqual(set(usernames), {'acp_cmr_filter', 'sho_chaderghat', 'android1', 'pc_inactive_cmr'})
+        self.assertEqual(res.data['count'], 4)
+        self.assertEqual(res.data['total_count'], 7)
+
+    # 3. Police Station filter
+    def test_police_station_filter(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/v1/auth/users/?police_station=Chaderghat')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertEqual(set(usernames), {'sho_chaderghat', 'android1', 'pc_inactive_cmr'})
+
+    # 4. Officer Level filter
+    def test_officer_level_filter(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/v1/auth/users/?officer_level=CONSTABLE')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertEqual(set(usernames), {'android1', 'pc_inactive_cmr', 'pc_banjara_active'})
+
+    # 5. Role filter compatibility
+    def test_role_filter_compatibility(self):
+        self.client.force_authenticate(user=self.admin)
+        res_role = self.client.get('/api/v1/auth/users/?role=SHO')
+        res_level = self.client.get('/api/v1/auth/users/?officer_level=SHO')
+        self.assertEqual(res_role.status_code, 200)
+        self.assertEqual(res_level.status_code, 200)
+        self.assertEqual(
+            [u['username'] for u in res_role.data['results']],
+            [u['username'] for u in res_level.data['results']]
+        )
+        self.assertEqual(set(u['username'] for u in res_role.data['results']), {'sho_chaderghat', 'sho_banjara'})
+
+    # 6. Status filter
+    def test_status_filter_active_and_inactive(self):
+        self.client.force_authenticate(user=self.admin)
+        # Active only
+        res_active = self.client.get('/api/v1/auth/users/?status=active')
+        self.assertEqual(res_active.status_code, 200)
+        active_usernames = [u['username'] for u in res_active.data['results']]
+        self.assertNotIn('pc_inactive_cmr', active_usernames)
+        self.assertIn('android1', active_usernames)
+
+        # Inactive only
+        res_inactive = self.client.get('/api/v1/auth/users/?status=inactive')
+        self.assertEqual(res_inactive.status_code, 200)
+        inactive_usernames = [u['username'] for u in res_inactive.data['results']]
+        self.assertEqual(inactive_usernames, ['pc_inactive_cmr'])
+
+    # 7. Search filter
+    def test_search_filter(self):
+        self.client.force_authenticate(user=self.admin)
+        # Search by username
+        res = self.client.get('/api/v1/auth/users/?search=android1')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.data['results']), 1)
+        self.assertEqual(res.data['results'][0]['username'], 'android1')
+
+        # Search by police_id
+        res_pid = self.client.get('/api/v1/auth/users/?search=PC-1001')
+        self.assertEqual(res_pid.status_code, 200)
+        self.assertEqual(res_pid.data['results'][0]['username'], 'android1')
+
+        # Search by first name
+        res_name = self.client.get('/api/v1/auth/users/?search=Ravi')
+        self.assertEqual(res_name.status_code, 200)
+        self.assertEqual(res_name.data['results'][0]['username'], 'android1')
+
+    # 8. Combined Zone + PS
+    def test_combined_zone_and_ps(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/v1/auth/users/?zone=Charminar&police_station=Chaderghat')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertEqual(set(usernames), {'sho_chaderghat', 'android1', 'pc_inactive_cmr'})
+
+    # 9. Combined Zone + Officer Level
+    def test_combined_zone_and_officer_level(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/v1/auth/users/?zone=Charminar&officer_level=SHO')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertEqual(usernames, ['sho_chaderghat'])
+
+    # 10. Combined PS + Officer Level
+    def test_combined_ps_and_officer_level(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/v1/auth/users/?police_station=Chaderghat&officer_level=CONSTABLE')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertEqual(set(usernames), {'android1', 'pc_inactive_cmr'})
+
+    # 11. Combined Zone + PS + Officer Level
+    def test_combined_zone_ps_and_officer_level(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/v1/auth/users/?zone=Charminar&police_station=Chaderghat&officer_level=CONSTABLE')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertEqual(set(usernames), {'android1', 'pc_inactive_cmr'})
+
+    # 12. All filters together (Search + Zone + PS + Officer Level + Status)
+    def test_all_filters_together(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get(
+            '/api/v1/auth/users/?search=android1&zone=Charminar&police_station=Chaderghat&officer_level=CONSTABLE&status=active'
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.data['results']), 1)
+        self.assertEqual(res.data['results'][0]['username'], 'android1')
+
+    # 13. Invalid Zone/PS combinations
+    def test_invalid_zone_ps_combinations(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/v1/auth/users/?zone=Charminar&police_station=Banjara Hills')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.data['results']), 0)
+        self.assertEqual(res.data['count'], 0)
+        self.assertEqual(res.data['total_count'], 7)
+
+    # 14. Dependent PS filtering
+    def test_dependent_ps_filtering(self):
+        self.client.force_authenticate(user=self.admin)
+        # PS without zone
+        res = self.client.get('/api/v1/auth/users/?police_station=Banjara Hills')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertEqual(set(usernames), {'sho_banjara', 'pc_banjara_active'})
+
+    # 15. Pagination with filters
+    def test_pagination_with_filters(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/v1/auth/users/?zone=Charminar&page=1&page_size=2')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.data['results']), 2)
+        self.assertEqual(res.data['count'], 4)
+        self.assertEqual(res.data['total_count'], 7)
+
+    # 16. Server-side jurisdiction restriction enforced
+    def test_jurisdiction_restricts_user_list_for_acp(self):
+        self.client.force_authenticate(user=self.acp_charminar)
+        # ACP Charminar should ONLY see Charminar users (4 users), even with no filters
+        res = self.client.get('/api/v1/auth/users/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['total_count'], 4)
+        self.assertEqual(res.data['count'], 4)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertNotIn('admin_main', usernames)
+        self.assertNotIn('sho_banjara', usernames)
+        self.assertNotIn('pc_banjara_active', usernames)
+
+        # Attempting to filter outside their jurisdiction must return 0 results
+        res_outside = self.client.get('/api/v1/auth/users/?zone=Jubilee Hills')
+        self.assertEqual(res_outside.status_code, 200)
+        self.assertEqual(len(res_outside.data['results']), 0)
+        self.assertEqual(res_outside.data['count'], 0)
+        self.assertEqual(res_outside.data['total_count'], 4)
+
+    # 17. No duplicate users
+    def test_no_duplicate_users(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/v1/auth/users/?search=a')
+        self.assertEqual(res.status_code, 200)
+        user_ids = [u['id'] for u in res.data['results']]
+        self.assertEqual(len(user_ids), len(set(user_ids)))
+
+    # 18. Admin can reset password without providing old password
+    def test_admin_can_reset_password_without_old_password(self):
+        self.client.force_authenticate(user=self.admin)
+        patch_res = self.client.patch(f'/api/v1/auth/users/{self.pc_active.id}/', {
+            'password': 'newpassword999'
+        })
+        self.assertEqual(patch_res.status_code, 200)
+        # Password must not be in response
+        self.assertNotIn('password', patch_res.data)
+
+        # Verify new password works
+        from django.contrib.auth import authenticate
+        user = authenticate(username='android1', password='newpassword999')
+        self.assertIsNotNone(user)
+        self.assertEqual(user.id, self.pc_active.id)
+
+    # 19. Blank reset password preserves existing password
+    def test_blank_reset_password_preserves_existing_password(self):
+        self.client.force_authenticate(user=self.admin)
+        patch_res = self.client.patch(f'/api/v1/auth/users/{self.pc_active.id}/', {
+            'password': '',
+            'first_name': 'Ravinder'
+        })
+        self.assertEqual(patch_res.status_code, 200)
+        self.assertEqual(patch_res.data['first_name'], 'Ravinder')
+
+        # Verify original password still works
+        from django.contrib.auth import authenticate
+        user = authenticate(username='android1', password='password123')
+        self.assertIsNotNone(user)
+
+    # 20. Unauthorized user cannot change password
+    def test_unauthorized_user_cannot_change_password(self):
+        self.client.force_authenticate(user=self.pc_active)
+        res = self.client.patch(f'/api/v1/auth/users/{self.sho_chaderghat.id}/', {
+            'password': 'hackedpassword123'
+        })
+        self.assertEqual(res.status_code, 403)
+
+
+

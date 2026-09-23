@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from common.permissions import CanManageUsers, CanAssignFieldOfficers
+from common.permissions import CanManageUsers, CanAssignFieldOfficers, filter_by_jurisdiction
 from .models import User, UserRole
 from .serializers import (
     UserSerializer,
@@ -66,20 +66,37 @@ class UserListCreateView(APIView):
     permission_classes = [CanManageUsers]
 
     def get(self, request):
-        qs = User.objects.all().order_by('-date_joined')
+        base_qs = filter_by_jurisdiction(User.objects.all(), request.user)
+        total_count = base_qs.count()
+        qs = base_qs
 
-        role = request.query_params.get('role')
-        if role and role.upper() in UserRole.values:
+        # 1. Zone filter
+        zone = request.query_params.get('zone')
+        if zone and zone != 'ALL' and zone.lower() != 'all zones':
+            qs = qs.filter(zone__iexact=zone.strip())
+
+        # 2. Police Station filter
+        police_station = request.query_params.get('police_station')
+        if police_station and police_station != 'ALL' and police_station.lower() != 'all police stations':
+            qs = qs.filter(police_station__iexact=police_station.strip())
+
+        # 3. Officer Level / Role filter (support both 'role' and 'officer_level')
+        role = request.query_params.get('role') or request.query_params.get('officer_level')
+        if role and role != 'ALL' and role.upper() in UserRole.values:
             qs = qs.filter(role=role.upper())
 
+        # 4. Status filter (support 'status=active|inactive' and 'is_active=true|false')
+        status_param = request.query_params.get('status')
         is_active = request.query_params.get('is_active')
-        if is_active is not None and is_active != '':
+        if status_param and status_param != 'ALL':
+            if status_param.upper() in ('ACTIVE', 'TRUE', '1'):
+                qs = qs.filter(is_active=True)
+            elif status_param.upper() in ('INACTIVE', 'DISABLED', 'FALSE', '0'):
+                qs = qs.filter(is_active=False)
+        elif is_active is not None and is_active != '' and is_active != 'ALL':
             qs = qs.filter(is_active=is_active.lower() in ('true', '1'))
 
-        police_station = request.query_params.get('police_station')
-        if police_station:
-            qs = qs.filter(police_station__iexact=police_station)
-
+        # 5. Search query
         search = request.query_params.get('search')
         if search:
             search = search.strip()
@@ -87,14 +104,35 @@ class UserListCreateView(APIView):
                 Q(username__icontains=search) |
                 Q(first_name__icontains=search) |
                 Q(last_name__icontains=search) |
-                Q(police_id__icontains=search)
+                Q(police_id__icontains=search) |
+                Q(police_station__icontains=search) |
+                Q(zone__icontains=search) |
+                Q(phone_number__icontains=search)
             )
+
+        qs = qs.distinct().order_by('-date_joined', 'id')
+        filtered_count = qs.count()
+
+        # Optional pagination support
+        page = request.query_params.get('page')
+        page_size = request.query_params.get('page_size')
+        if page or page_size:
+            from rest_framework.pagination import PageNumberPagination
+            paginator = PageNumberPagination()
+            paginator.page_size = int(page_size) if page_size else 50
+            page_data = paginator.paginate_queryset(qs, request)
+            serializer = UserSerializer(page_data, many=True)
+            resp = paginator.get_paginated_response(serializer.data)
+            resp.data['total_count'] = total_count
+            return resp
 
         serializer = UserSerializer(qs, many=True)
         return Response({
-            'count': len(serializer.data),
+            'count': filtered_count,
+            'total_count': total_count,
             'results': serializer.data
         })
+
 
     def post(self, request):
         serializer = UserCreateUpdateSerializer(data=request.data)

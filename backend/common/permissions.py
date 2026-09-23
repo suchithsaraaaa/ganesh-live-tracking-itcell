@@ -84,6 +84,8 @@ def filter_by_jurisdiction(queryset, user, ps_field='police_station', zone_field
         return queryset.none()
 
     if user.role == UserRole.CONSTABLE:
+        if getattr(queryset, 'model', None) and queryset.model.__name__ == 'User':
+            return queryset.filter(id=user.id)
         # Constable only sees idols currently assigned to them
         from apps.assignments.models import Assignment
         assigned_idol_ids = Assignment.objects.filter(
@@ -93,3 +95,4 @@ def filter_by_jurisdiction(queryset, user, ps_field='police_station', zone_field
         return queryset.filter(id__in=assigned_idol_ids)
 
     return queryset.none()
+

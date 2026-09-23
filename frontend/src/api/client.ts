@@ -341,10 +341,10 @@ export async function endAssignment(
       (res.status === 403
         ? 'Permission denied. Administrative privilege required to force-end.'
         : res.status === 404
-        ? 'Assignment not found.'
-        : res.status === 500
-        ? 'Internal server error (500). Please check backend logs.'
-        : `Failed to end assignment (HTTP ${res.status})`);
+          ? 'Assignment not found.'
+          : res.status === 500
+            ? 'Internal server error (500). Please check backend logs.'
+            : `Failed to end assignment (HTTP ${res.status})`);
     throw new ApiError(errorMsg, res.status);
   }
   return data;
@@ -357,19 +357,30 @@ export async function endAssignment(
 export async function fetchUsers(params?: {
   search?: string;
   role?: string;
+  officer_level?: string;
   is_active?: boolean;
+  status?: string;
   police_station?: string;
-}): Promise<{ count: number; results: User[] }> {
+  zone?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<{ count: number; total_count?: number; results: User[] }> {
   const query = new URLSearchParams();
   if (params?.search) query.append('search', params.search);
   if (params?.role) query.append('role', params.role);
+  if (params?.officer_level) query.append('officer_level', params.officer_level);
   if (params?.is_active !== undefined) query.append('is_active', String(params.is_active));
+  if (params?.status) query.append('status', params.status);
   if (params?.police_station) query.append('police_station', params.police_station);
+  if (params?.zone) query.append('zone', params.zone);
+  if (params?.page) query.append('page', String(params.page));
+  if (params?.page_size) query.append('page_size', String(params.page_size));
 
   const res = await apiFetch(`/auth/users/?${query.toString()}`);
   if (!res.ok) throw new ApiError('Failed to load user accounts', res.status);
   return await res.json();
 }
+
 
 export async function createUser(userData: Partial<User> & { password?: string }): Promise<User> {
   const res = await apiFetch('/auth/users/', {

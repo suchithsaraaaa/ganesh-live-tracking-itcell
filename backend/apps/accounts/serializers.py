@@ -35,7 +35,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class UserCreateUpdateSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, required=False, min_length=8)
+    password = serializers.CharField(write_only=True, required=False, allow_blank=True)
     custom_permissions = serializers.ListField(
         child=serializers.CharField(),
         required=False,
@@ -67,6 +67,13 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
                     f"Unknown or unauthorized permission codename(s): {', '.join(invalid)}"
                 )
         return value
+
+    def validate_password(self, value):
+        if not value or not str(value).strip():
+            return None
+        if len(str(value).strip()) < 6:
+            raise serializers.ValidationError("Password must be at least 6 characters.")
+        return str(value).strip()
 
     def validate(self, attrs):
         from apps.geography.models import PoliceStationBoundary
@@ -129,8 +136,8 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         password = validated_data.pop('password', None)
         user = User(**validated_data)
-        if password:
-            user.set_password(password)
+        if password and str(password).strip():
+            user.set_password(str(password).strip())
         else:
             user.set_unusable_password()
         user.save()
@@ -140,10 +147,11 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
         password = validated_data.pop('password', None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-        if password:
-            instance.set_password(password)
+        if password and str(password).strip():
+            instance.set_password(str(password).strip())
         instance.save()
         return instance
+
 
 
 class AssignableOfficerSerializer(serializers.ModelSerializer):
