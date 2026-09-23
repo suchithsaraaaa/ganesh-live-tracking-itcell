@@ -4,7 +4,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 from apps.accounts.models import User, UserRole
-from apps.idols.models import Idol, ProcessionState
+from apps.idols.models import Idol, ProcessionState, GeocodingConfidence
 from apps.assignments.models import Assignment
 from apps.tracking.models import TrackingSession, LocationPoint, TrackingSessionStatus
 
@@ -25,7 +25,10 @@ class TrackingAPITests(TestCase):
             gpid='HYDCMRZCMNR1749',
             name='Charminar Tracking Idol',
             police_station='Charminar',
-            zone='Charminar'
+            zone='Charminar',
+            latitude=17.3616,
+            longitude=78.4747,
+            geocoding_confidence=GeocodingConfidence.EXACT
         )
         self.assignment = Assignment.assign_constable(
             idol=self.idol,
@@ -37,13 +40,77 @@ class TrackingAPITests(TestCase):
     def test_start_tracking_creates_session_and_updates_state(self):
         res = self.client.post(reverse('tracking-start'), {
             'assignment_id': self.assignment.id,
-            'device_info': 'Android Samsung S21'
+            'device_info': 'Android Samsung S21',
+            'latitude': 17.3616,
+            'longitude': 78.4747
         })
         self.assertEqual(res.status_code, 201)
         self.assertEqual(res.data['status'], 'ACTIVE')
 
         self.idol.refresh_from_db()
         self.assertEqual(self.idol.procession_state, ProcessionState.TRACKING)
+
+    def test_start_tracking_exact_within_30m_allowed(self):
+        # 0.00027 deg latitude ~ 30 meters
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': self.assignment.id,
+            'latitude': 17.36187,
+            'longitude': 78.4747
+        })
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data['status'], 'ACTIVE')
+
+    def test_start_tracking_exact_beyond_60m_rejected(self):
+        # 0.00055 deg latitude ~ 61 meters (> 50m)
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': self.assignment.id,
+            'latitude': 17.36215,
+            'longitude': 78.4747
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('START_GATE_REJECTED', res.data['error'])
+        self.assertGreater(res.data['distance_meters'], 50.0)
+
+    def test_start_tracking_high_confidence_within_30m_allowed(self):
+        self.idol.geocoding_confidence = GeocodingConfidence.HIGH
+        self.idol.save(update_fields=['geocoding_confidence'])
+
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': self.assignment.id,
+            'latitude': 17.36187,
+            'longitude': 78.4747
+        })
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data['status'], 'ACTIVE')
+
+    def test_start_tracking_medium_locality_rejected(self):
+        # Even if officer is physically near the approximate coordinate, locality-level cannot authorize 50m gate
+        self.idol.geocoding_confidence = GeocodingConfidence.MEDIUM
+        self.idol.save(update_fields=['geocoding_confidence'])
+
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': self.assignment.id,
+            'latitude': 17.3616,
+            'longitude': 78.4747
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('locality-level', res.data['error'])
+        self.assertFalse(res.data['start_gate_eligible'])
+
+    def test_start_tracking_unresolved_rejected(self):
+        self.idol.geocoding_confidence = GeocodingConfidence.UNRESOLVED
+        self.idol.latitude = None
+        self.idol.longitude = None
+        self.idol.save(update_fields=['geocoding_confidence', 'latitude', 'longitude'])
+
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': self.assignment.id,
+            'latitude': 17.3616,
+            'longitude': 78.4747
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('unresolved', res.data['error'])
+        self.assertFalse(res.data['start_gate_eligible'])
 
     def test_single_location_ingestion_and_state_transition(self):
         session = TrackingSession.objects.create(

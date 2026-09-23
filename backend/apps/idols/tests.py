@@ -345,3 +345,105 @@ class GeocodingServiceTests(TestCase):
         self.assertTrue(is_within_hyderabad_bounds(lat, lon))
         self.assertTrue(17.15 <= lat <= 17.70)
         self.assertTrue(78.15 <= lon <= 78.75)
+
+    def test_pin_code_and_landmarks_preserved_in_sanitization(self):
+        from apps.idols.services.geocoding import sanitize_address_for_geocoding
+        raw = "H.No 18-3-465 Near Mahankali Temple, Lal Darwaza, 500053"
+        cleaned = sanitize_address_for_geocoding(raw)
+        self.assertIn("500053", cleaned, "PIN code must NOT be stripped from address")
+        self.assertIn("Mahankali Temple", cleaned, "Landmark must be preserved")
+        self.assertIn("Lal Darwaza", cleaned)
+
+    def test_latitude_longitude_order_no_reversal(self):
+        """
+        Explicitly assert latitude = 17.xx (North) and longitude = 78.xx (East).
+        Never reversed.
+        """
+        from apps.idols.services.geocoding import geocode_idol, MockGeocoder
+        idol = Idol.objects.create(
+            gpid='HYDTESTGEO001',
+            address='Lal Darwaza, 500053',
+            instal_street='Ganesh Nagar',
+            instal_village='Lal Darwaza',
+            instal_pin='500053',
+            police_station='Chatrinaka'
+        )
+        res = geocode_idol(idol, geocoder=MockGeocoder())
+        self.assertIsNotNone(res['latitude'])
+        self.assertIsNotNone(res['longitude'])
+        lat = float(res['latitude'])
+        lon = float(res['longitude'])
+
+        # Latitude must be ~17 (Hyderabad North)
+        self.assertTrue(17.0 <= lat <= 18.0, f"Latitude was {lat}, expected ~17.xx (possible reversal!)")
+        # Longitude must be ~78 (Hyderabad East)
+        self.assertTrue(78.0 <= lon <= 79.0, f"Longitude was {lon}, expected ~78.xx (possible reversal!)")
+
+    def test_generic_city_centroid_rejected(self):
+        """
+        Verify that Mecca Masjid / generic Charminar city centroid (17.360589, 78.4740613)
+        is rejected and never assigned as a valid idol location.
+        """
+        from apps.idols.services.geocoding import score_candidate, CITY_CENTROID_LAT, CITY_CENTROID_LON
+        idol = Idol.objects.create(
+            gpid='HYDTESTCENTROID',
+            instal_street='Random Street',
+            instal_pin='500018'
+        )
+        fake_centroid_cand = {
+            'lat': str(CITY_CENTROID_LAT),
+            'lon': str(CITY_CENTROID_LON),
+            'display_name': 'Hyderabad, Telangana, India',
+            'type': 'city',
+            'address': {'state': 'Telangana', 'city': 'Hyderabad'}
+        }
+        scored = score_candidate(fake_centroid_cand, idol, 'street')
+        self.assertIsNone(scored, "Generic city centroid must be rejected!")
+
+    def test_out_of_state_candidate_rejected(self):
+        """
+        Candidates from outside Telangana (e.g. Karnataka JP Nagar) must be rejected.
+        """
+        from apps.idols.services.geocoding import score_candidate
+        idol = Idol.objects.create(
+            gpid='HYDTESTOUTSTATE',
+            instal_street='JP Nagar',
+            instal_pin='500053'
+        )
+        karnataka_cand = {
+            'lat': '12.9096941',
+            'lon': '77.5866067',
+            'display_name': 'JP Nagar, Bengaluru, Karnataka, India',
+            'type': 'suburb',
+            'address': {'state': 'Karnataka', 'city': 'Bengaluru'}
+        }
+        scored = score_candidate(karnataka_cand, idol, 'street')
+        self.assertIsNone(scored, "Out-of-state candidates must be rejected!")
+
+    def test_confidence_classification(self):
+        from apps.idols.services.geocoding import score_candidate
+        from apps.idols.models import GeocodingConfidence
+        idol = Idol.objects.create(
+            gpid='HYDTESTCONF',
+            instal_street='Temple Road',
+            instal_pin='500053'
+        )
+        exact_cand = {
+            'lat': '17.3450', 'lon': '78.4750',
+            'display_name': 'Hanuman Temple, Lal Darwaza',
+            'type': 'place_of_worship',
+            'address': {'state': 'Telangana', 'postcode': '500053'}
+        }
+        scored = score_candidate(exact_cand, idol, 'street')
+        self.assertIsNotNone(scored)
+        self.assertEqual(scored[4], GeocodingConfidence.EXACT)
+
+        high_cand = {
+            'lat': '17.3450', 'lon': '78.4750',
+            'display_name': 'Temple Road, Lal Darwaza',
+            'type': 'residential',
+            'address': {'state': 'Telangana', 'postcode': '500053'}
+        }
+        scored_high = score_candidate(high_cand, idol, 'street')
+        self.assertIsNotNone(scored_high)
+        self.assertEqual(scored_high[4], GeocodingConfidence.HIGH)

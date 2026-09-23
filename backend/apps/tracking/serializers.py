@@ -33,6 +33,8 @@ class StartTrackingSerializer(serializers.Serializer):
     assignment_id = serializers.IntegerField(required=False)
     gpid = serializers.CharField(required=False)
     device_info = serializers.CharField(required=False, allow_blank=True, default='')
+    latitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
+    longitude = serializers.DecimalField(max_digits=10, decimal_places=7, required=False, allow_null=True)
 
     def validate(self, data):
         assignment_id = data.get('assignment_id')

@@ -68,6 +68,10 @@ export interface Idol {
   latitude?: number | null;
   longitude?: number | null;
   geocoding_status?: string;
+  geocoding_confidence?: 'EXACT' | 'HIGH' | 'MEDIUM' | 'UNRESOLVED';
+  geocoding_result_type?: string;
+  resolved_address?: string;
+  start_gate_eligible?: boolean;
   idol_height: number | null;
   height_classification?: 'GREEN' | 'YELLOW' | 'RED' | 'SUBTHRESHOLD';
   is_operational_eligible?: boolean;
@@ -103,6 +107,10 @@ export interface ActiveMarker {
   connection_state: ConnectionState;
   is_origin_marker?: boolean;
   geocoding_status?: string;
+  geocoding_confidence?: 'EXACT' | 'HIGH' | 'MEDIUM' | 'UNRESOLVED';
+  geocoding_result_type?: string;
+  resolved_address?: string;
+  start_gate_eligible?: boolean;
   latitude: number;
   longitude: number;
   speed: number | null;

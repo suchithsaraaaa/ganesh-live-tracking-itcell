@@ -20,7 +20,19 @@ from .serializers import (
     BatchIngestLocationSerializer,
 )
 from apps.accounts.models import User
-from apps.idols.models import Idol, ProcessionState
+from apps.idols.models import Idol, ProcessionState, GeocodingConfidence
+
+
+def haversine_distance_meters(lat1, lon1, lat2, lon2):
+    """
+    Computes great-circle distance between two coordinates in meters.
+    """
+    R = 6371000.0  # Earth radius in meters
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
 
 
 def calculate_sequential_distance_km(points):
@@ -81,6 +93,51 @@ class StartTrackingView(APIView):
                 {'error': 'You do not have permission to start tracking for this idol.'},
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        idol = assignment.idol
+        conf = idol.geocoding_confidence
+
+        # Geocoding confidence 50-meter Start Gate enforcement
+        if conf == GeocodingConfidence.UNRESOLVED or not idol.latitude or not idol.longitude:
+            return Response(
+                {
+                    'error': 'START_GATE_REJECTED: Idol origin coordinate is unresolved. Field officer verification required before procession can be started.',
+                    'geocoding_confidence': conf,
+                    'start_gate_eligible': False
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if conf == GeocodingConfidence.MEDIUM:
+            return Response(
+                {
+                    'error': 'START_GATE_REJECTED: Idol location is approximate (locality-level). 50-meter pandal geofence cannot be verified. Authoritative EXACT/HIGH coordinate required.',
+                    'geocoding_confidence': conf,
+                    'start_gate_eligible': False
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # EXACT and HIGH coordinates require officer to be within 50 meters
+        officer_lat = serializer.validated_data.get('latitude')
+        officer_lon = serializer.validated_data.get('longitude')
+
+        if officer_lat is not None and officer_lon is not None:
+            dist_m = haversine_distance_meters(
+                float(officer_lat), float(officer_lon),
+                float(idol.latitude), float(idol.longitude)
+            )
+            if dist_m > 50.0:
+                return Response(
+                    {
+                        'error': f'START_GATE_REJECTED: Officer is {dist_m:.1f}m away from authoritative idol origin (maximum allowed: 50.0m).',
+                        'distance_meters': round(dist_m, 1),
+                        'max_allowed_meters': 50.0,
+                        'geocoding_confidence': conf,
+                        'start_gate_eligible': True
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         with transaction.atomic():
             # Stop any previously active tracking session for this assignment

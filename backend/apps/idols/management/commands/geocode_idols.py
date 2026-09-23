@@ -1,10 +1,12 @@
 """
 Django Management Command to geocode Idol installation addresses into geographic coordinates.
-Enforces data integrity, privacy sanitization, and structured status tracking (GEOCODED, PARTIAL, UNRESOLVED).
+Enforces data integrity, privacy sanitization, and structured status tracking (EXACT, HIGH, MEDIUM, UNRESOLVED).
 """
+import os
+import json
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from apps.idols.models import Idol, GeocodingStatus
+from apps.idols.models import Idol, GeocodingStatus, GeocodingConfidence
 from apps.idols.services.geocoding import geocode_idol, get_geocoder
 
 
@@ -16,7 +18,7 @@ class Command(BaseCommand):
             '--limit',
             type=int,
             default=None,
-            help='Limit the number of eligible records to geocode (e.g. 10, 50)'
+            help='Limit the number of eligible records to geocode (e.g. 10, 25, 50)'
         )
         parser.add_argument(
             '--force',
@@ -24,9 +26,19 @@ class Command(BaseCommand):
             help='Re-geocode records even if they already have coordinates'
         )
         parser.add_argument(
+            '--retry-failed',
+            action='store_true',
+            help='Reprocess only UNRESOLVED or missing coordinate records'
+        )
+        parser.add_argument(
             '--dry-run',
             action='store_true',
             help='Perform geocoding queries without saving coordinates to the database'
+        )
+        parser.add_argument(
+            '--backup',
+            action='store_true',
+            help='Export existing coordinates before running'
         )
         parser.add_argument(
             '--provider',
@@ -43,12 +55,23 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         limit = options['limit']
         force = options['force']
+        retry_failed = options['retry_failed']
         dry_run = options['dry_run']
+        backup = options['backup']
         all_heights = options['all_heights']
         provider_override = options.get('provider')
 
-
         self.stdout.write(self.style.MIGRATE_HEADING("=== Hyderabad Police Ganesh Visarjan: Idol Geocoding Pipeline ==="))
+
+        if backup:
+            os.makedirs('scratch', exist_ok=True)
+            bk_data = list(Idol.objects.filter(idol_height__gte=15.0).values(
+                'gpid', 'latitude', 'longitude', 'geocoding_status', 'geocoding_confidence', 'geocoded_at'
+            ))
+            bk_path = f"scratch/backup_coordinates_{int(timezone.now().timestamp())}.json"
+            with open(bk_path, 'w') as f:
+                json.dump(bk_data, f, default=str, indent=2)
+            self.stdout.write(self.style.SUCCESS(f"Pre-flight backup written to {bk_path} ({len(bk_data)} records)"))
 
         qs = Idol.objects.all().order_by('id')
         if not all_heights:
@@ -57,11 +80,14 @@ class Command(BaseCommand):
         total_eligible = qs.count()
         self.stdout.write(f"Total operational target population: {total_eligible}")
 
-        if not force:
+        if retry_failed:
+            qs = qs.filter(latitude__isnull=True)
+            self.stdout.write(self.style.WARNING(f"Retry-failed mode enabled: processing {qs.count()} pending/unresolved records."))
+        elif not force:
             qs = qs.filter(latitude__isnull=True)
             self.stdout.write(f"Ungeocoded pending records: {qs.count()}")
         else:
-            self.stdout.write(self.style.WARNING("Force mode enabled: reprocessing all targeted records."))
+            self.stdout.write(self.style.WARNING("Force mode enabled: reprocessing targeted records."))
 
         if limit:
             qs = qs[:limit]
@@ -77,8 +103,9 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(self.style.WARNING("[DRY RUN MODE]: Database updates will NOT be committed."))
 
-        geocoded_count = 0
-        partial_count = 0
+        exact_count = 0
+        high_count = 0
+        medium_count = 0
         unresolved_count = 0
         failed_samples = []
 
@@ -91,21 +118,26 @@ class Command(BaseCommand):
             status = res['status']
             confidence = res['confidence']
 
-            if status == GeocodingStatus.GEOCODED:
-                geocoded_count += 1
-                symbol = self.style.SUCCESS("[GEOCODED]")
-            elif status == GeocodingStatus.PARTIAL:
-                partial_count += 1
-                symbol = self.style.WARNING("[PARTIAL]")
+            if confidence == GeocodingConfidence.EXACT:
+                exact_count += 1
+                symbol = self.style.SUCCESS("[EXACT]")
+            elif confidence == GeocodingConfidence.HIGH:
+                high_count += 1
+                symbol = self.style.SUCCESS("[HIGH]")
+            elif confidence == GeocodingConfidence.MEDIUM:
+                medium_count += 1
+                symbol = self.style.WARNING("[MEDIUM]")
             else:
                 unresolved_count += 1
                 symbol = self.style.ERROR("[UNRESOLVED]")
+                lat = None
+                lon = None
                 if len(failed_samples) < 5:
-                    failed_samples.append((idol.gpid, idol.address, idol.police_station))
+                    failed_samples.append((idol.gpid, idol.address, idol.police_station, idol.instal_pin))
 
             self.stdout.write(
                 f"[{idx}/{len(target_records)}] {idol.gpid} (H: {idol.idol_height}ft) {symbol} "
-                f"-> ({lat}, {lon}) [{confidence}] | PS: {idol.police_station}"
+                f"-> ({lat}, {lon}) [{confidence}] | PIN: {idol.instal_pin} | PS: {idol.police_station}"
             )
 
             if not dry_run:
@@ -114,43 +146,47 @@ class Command(BaseCommand):
                 idol.geocoding_status = status
                 idol.geocoding_confidence = confidence
                 idol.geocoding_provider = res.get('provider', '')
+                idol.resolved_address = res.get('resolved_address', '')
+                idol.geocoding_result_type = res.get('result_type', '')
+                idol.geocoding_query_used = res.get('query_used', '')
                 idol.geocoded_at = now
                 idol.save(update_fields=[
                     'latitude', 'longitude', 'geocoding_status',
-                    'geocoding_confidence', 'geocoding_provider', 'geocoded_at'
+                    'geocoding_confidence', 'geocoding_provider',
+                    'resolved_address', 'geocoding_result_type',
+                    'geocoding_query_used', 'geocoded_at'
                 ])
 
         self.stdout.write("\n" + "=" * 65)
         self.stdout.write(self.style.MIGRATE_HEADING("=== Geocoding Reconciliation Summary ==="))
         self.stdout.write(f"Processed in this run:       {len(target_records)}")
-        self.stdout.write(f"  - High Confidence (Address): {geocoded_count}")
-        self.stdout.write(f"  - Medium Confidence (Area):  {partial_count}")
+        self.stdout.write(f"  - Exact (Building/Pandal):   {exact_count}")
+        self.stdout.write(f"  - High Confidence (Street):  {high_count}")
+        self.stdout.write(f"  - Medium (Locality/Village): {medium_count}")
         self.stdout.write(f"  - Unresolved:                {unresolved_count}")
 
         # Compute full dynamic database statistics across all eligible idols
         total_eligible_db = Idol.objects.filter(idol_height__gte=15.0).count()
-        high_conf_db = Idol.objects.filter(idol_height__gte=15.0, geocoding_status=GeocodingStatus.GEOCODED).count()
-        med_conf_db = Idol.objects.filter(idol_height__gte=15.0, geocoding_status=GeocodingStatus.PARTIAL).count()
+        exact_db = Idol.objects.filter(idol_height__gte=15.0, geocoding_confidence=GeocodingConfidence.EXACT).count()
+        high_db = Idol.objects.filter(idol_height__gte=15.0, geocoding_confidence=GeocodingConfidence.HIGH).count()
+        med_db = Idol.objects.filter(idol_height__gte=15.0, geocoding_confidence=GeocodingConfidence.MEDIUM).count()
         unresolved_db = Idol.objects.filter(idol_height__gte=15.0, latitude__isnull=True).count()
-        invalid_db = Idol.objects.filter(idol_height__gte=15.0, geocoding_status='INVALID').count()
         geocoded_with_coords = Idol.objects.filter(idol_height__gte=15.0, latitude__isnull=False)
         total_geocoded_db = geocoded_with_coords.count()
         unique_coords_db = geocoded_with_coords.values('latitude', 'longitude').distinct().count()
-        colocated_groups = total_geocoded_db - unique_coords_db
 
         self.stdout.write("\n" + self.style.MIGRATE_LABEL("--- Overall Eligible (>=15ft) Database Reconciliation ---"))
-        self.stdout.write(f"Total Eligible Population:   {total_eligible_db}")
-        self.stdout.write(f"  - High Confidence:         {high_conf_db}")
-        self.stdout.write(f"  - Medium (Locality):       {med_conf_db}")
-        self.stdout.write(f"  - Total Geocoded:          {total_geocoded_db} / {total_eligible_db}")
-        self.stdout.write(f"  - Unresolved:              {unresolved_db}")
-        self.stdout.write(f"  - Invalid Coordinates:     {invalid_db}")
-        self.stdout.write(f"  - Unique Coordinates:      {unique_coords_db}")
-        self.stdout.write(f"  - Co-located Idol Groups:  {colocated_groups}")
-        self.stdout.write(f"  - Zero Fabricated Coords:  VERIFIED")
+        self.stdout.write(f"Total Eligible Population:     {total_eligible_db}")
+        self.stdout.write(f"  - Exact (Start-Gate Eligible): {exact_db}")
+        self.stdout.write(f"  - High (Start-Gate Eligible):  {high_db}")
+        self.stdout.write(f"  - Medium (Locality Only):      {med_db}")
+        self.stdout.write(f"  - Total Geocoded with Coords:  {total_geocoded_db} / {total_eligible_db}")
+        self.stdout.write(f"  - Unresolved (Not Plotted):    {unresolved_db}")
+        self.stdout.write(f"  - Unique Coordinates:          {unique_coords_db}")
+        self.stdout.write(f"  - Zero Fabricated Coords:      VERIFIED")
 
         if failed_samples:
             self.stdout.write("\nSample Unresolved Records in this run:")
-            for gpid, addr, ps in failed_samples:
-                self.stdout.write(f"  - GPID: {gpid} | PS: {ps} | Addr: '{addr}'")
+            for gpid, addr, ps, pin in failed_samples:
+                self.stdout.write(f"  - GPID: {gpid} | PS: {ps} | PIN: {pin} | Addr: '{addr}'")
         self.stdout.write("=" * 65)

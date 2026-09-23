@@ -12,8 +12,15 @@ class ProcessionState(models.TextChoices):
 
 class GeocodingStatus(models.TextChoices):
     NOT_GEOCODED = 'NOT_GEOCODED', 'Not Geocoded'
-    GEOCODED = 'GEOCODED', 'Geocoded (High Confidence)'
-    PARTIAL = 'PARTIAL', 'Partial / Low Confidence'
+    GEOCODED = 'GEOCODED', 'Geocoded'
+    PARTIAL = 'PARTIAL', 'Partial'
+    UNRESOLVED = 'UNRESOLVED', 'Unresolved'
+
+
+class GeocodingConfidence(models.TextChoices):
+    EXACT = 'EXACT', 'Exact Building / Premise'
+    HIGH = 'HIGH', 'High Confidence (Street / Landmark)'
+    MEDIUM = 'MEDIUM', 'Medium Confidence (Locality / Village)'
     UNRESOLVED = 'UNRESOLVED', 'Unresolved'
 
 
@@ -58,7 +65,15 @@ class Idol(models.Model):
     )
     geocoded_at = models.DateTimeField(null=True, blank=True)
     geocoding_provider = models.CharField(max_length=50, blank=True)
-    geocoding_confidence = models.CharField(max_length=50, blank=True)
+    geocoding_confidence = models.CharField(
+        max_length=20,
+        choices=GeocodingConfidence.choices,
+        default=GeocodingConfidence.UNRESOLVED,
+        db_index=True
+    )
+    resolved_address = models.TextField(blank=True, help_text="Display address returned by geocoder")
+    geocoding_result_type = models.CharField(max_length=50, blank=True, help_text="OSM type: building, road, suburb, etc.")
+    geocoding_query_used = models.TextField(blank=True, help_text="Exact query string passed to geocoder")
 
     # Dimensions
     idol_height = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)

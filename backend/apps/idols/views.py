@@ -206,6 +206,10 @@ class DashboardStatsView(APIView):
                     'height_classification': get_height_classification(height_val),
                     'immersion_date': str(idol.immersion_date) if idol.immersion_date else None,
                     'origin_location': idol.address or idol.instal_street or idol.instal_village or 'N/A',
+                    'geocoding_confidence': idol.geocoding_confidence,
+                    'geocoding_result_type': idol.geocoding_result_type,
+                    'resolved_address': idol.resolved_address,
+                    'start_gate_eligible': idol.geocoding_confidence in ['EXACT', 'HIGH'],
                     'destination': idol.river_name or idol.lake_type or 'Visarjan Site',
                     'owner_name': idol.name or idol.association_name or 'N/A',
                     'assigned_constable': {
@@ -239,6 +243,10 @@ class DashboardStatsView(APIView):
                     'height_classification': get_height_classification(height_val),
                     'immersion_date': str(idol.immersion_date) if idol.immersion_date else None,
                     'origin_location': idol.address or idol.instal_street or idol.instal_village or 'N/A',
+                    'geocoding_confidence': idol.geocoding_confidence,
+                    'geocoding_result_type': idol.geocoding_result_type,
+                    'resolved_address': idol.resolved_address,
+                    'start_gate_eligible': idol.geocoding_confidence in ['EXACT', 'HIGH'],
                     'destination': idol.river_name or idol.lake_type or 'Visarjan Site',
                     'owner_name': idol.name or idol.association_name or 'N/A',
                     'assigned_constable': {
@@ -280,6 +288,10 @@ class DashboardStatsView(APIView):
                 'height_classification': get_height_classification(height_val),
                 'immersion_date': str(idol.immersion_date) if idol.immersion_date else None,
                 'origin_location': idol.address or idol.instal_street or idol.instal_village or 'N/A',
+                'geocoding_confidence': idol.geocoding_confidence,
+                'geocoding_result_type': idol.geocoding_result_type,
+                'resolved_address': idol.resolved_address,
+                'start_gate_eligible': idol.geocoding_confidence in ['EXACT', 'HIGH'],
                 'destination': idol.river_name or idol.lake_type or 'Visarjan Site',
                 'owner_name': idol.name or idol.association_name or 'N/A',
                 'assigned_constable': {

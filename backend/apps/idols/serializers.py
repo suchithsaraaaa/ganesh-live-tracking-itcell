@@ -28,6 +28,10 @@ class IdolListSerializer(serializers.ModelSerializer):
             'latitude',
             'longitude',
             'geocoding_status',
+            'geocoding_confidence',
+            'geocoding_result_type',
+            'resolved_address',
+            'start_gate_eligible',
             'idol_height',
             'height_classification',
             'is_operational_eligible',
@@ -41,6 +45,15 @@ class IdolListSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
+
+    start_gate_eligible = serializers.SerializerMethodField()
+
+    def get_start_gate_eligible(self, obj):
+        return bool(
+            obj.geocoding_confidence in ['EXACT', 'HIGH']
+            and obj.latitude is not None
+            and obj.longitude is not None
+        )
 
     def get_height_classification(self, obj):
         if obj.idol_height is None:
@@ -66,6 +79,14 @@ class IdolDetailSerializer(serializers.ModelSerializer):
     contact_info = serializers.SerializerMethodField()
     height_classification = serializers.SerializerMethodField()
     is_operational_eligible = serializers.SerializerMethodField()
+    start_gate_eligible = serializers.SerializerMethodField()
+
+    def get_start_gate_eligible(self, obj):
+        return bool(
+            obj.geocoding_confidence in ['EXACT', 'HIGH']
+            and obj.latitude is not None
+            and obj.longitude is not None
+        )
 
     class Meta:
         model = Idol
@@ -91,6 +112,10 @@ class IdolDetailSerializer(serializers.ModelSerializer):
             'geocoding_status',
             'geocoded_at',
             'geocoding_confidence',
+            'geocoding_result_type',
+            'resolved_address',
+            'geocoding_query_used',
+            'start_gate_eligible',
             'idol_height',
             'height_classification',
             'is_operational_eligible',

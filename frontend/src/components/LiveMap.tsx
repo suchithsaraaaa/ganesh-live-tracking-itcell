@@ -80,8 +80,11 @@ function createMarkerIcon(marker: ActiveMarker, isSelected: boolean = false): L.
     ? '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>'
     : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>';
 
+  const isMediumConf = marker.geocoding_confidence === 'MEDIUM';
   const borderStyle = isSelected
     ? '3px solid #FFFFFF'
+    : isOrigin && isMediumConf
+    ? '2.5px dashed #F59E0B'
     : isOrigin
     ? '2px dashed rgba(255,255,255,0.7)'
     : '2px solid #0B0B0A';
@@ -91,7 +94,7 @@ function createMarkerIcon(marker: ActiveMarker, isSelected: boolean = false): L.
     html: `
       <div class="relative flex items-center justify-center" style="width: ${size}px; height: ${size}px;">
         ${status.pulse}
-        <div style="background-color: ${heightColor}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${borderStyle}; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);" title="${isOrigin ? 'Origin Location (Static)' : 'Live Telemetry'}">
+        <div style="background-color: ${heightColor}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${borderStyle}; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);" title="${isOrigin ? (isMediumConf ? 'Origin: Locality Level (Approximate)' : 'Origin: Authoritative Pandal') : 'Live Telemetry'}">
           <svg style="width: ${size * 0.48}px; height: ${size * 0.48}px; color: white;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             ${iconPath}
           </svg>
@@ -115,8 +118,19 @@ function buildMarkerPopupHtml(m: ActiveMarker): string {
     ? '21–25 FT'
     : '15–20 FT';
 
+  const conf = m.geocoding_confidence || 'HIGH';
+  const confBadge = conf === 'EXACT'
+    ? '<span style="color: #10B981; font-weight:700;">EXACT (Pandal)</span>'
+    : conf === 'HIGH'
+    ? '<span style="color: #06B6D4; font-weight:700;">HIGH (Street)</span>'
+    : '<span style="color: #F59E0B; font-weight:700;">MEDIUM (Locality Approx)</span>';
+
+  const gateBadge = m.start_gate_eligible
+    ? '<span style="color: #10B981; font-weight:600;">Eligible (&le;50m)</span>'
+    : '<span style="color: #EF4444; font-weight:600;">Rejected (Locality Only)</span>';
+
   return `
-    <div style="font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.4; min-width: 190px;">
+    <div style="font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.4; min-width: 210px;">
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; margin-bottom: 6px;">
         <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; color: #D9793B;">
           ${m.gpid}
@@ -135,13 +149,15 @@ function buildMarkerPopupHtml(m: ActiveMarker): string {
         <span style="color: #9C9890;">Type:</span> <span>${m.is_origin_marker ? '<span style="color: #94A3B8; font-weight:600;">Origin Location</span>' : '<span style="color: #10B981; font-weight:600;">Live Telemetry</span>'}</span>
         <span style="color: #9C9890;">Zone:</span> <span>${m.zone}</span>
         <span style="color: #9C9890;">Police Station:</span> <span>${m.police_station} (${m.ps_code})</span>
+        <span style="color: #9C9890;">Confidence:</span> <span>${confBadge}</span>
+        <span style="color: #9C9890;">50m Start Gate:</span> <span>${gateBadge}</span>
         <span style="color: #9C9890;">Constable:</span> <span>${m.assigned_constable?.name || 'Unassigned'}</span>
         <span style="color: #9C9890;">Procession:</span> <span style="font-weight: 600; color: #F2EFE9;">${m.procession_state}</span>
         <span style="color: #9C9890;">Freshness:</span> <span style="font-weight: 600; color: ${m.is_origin_marker ? '#94A3B8' : m.connection_state === 'LIVE' ? '#10B981' : '#F59E0B'};">${m.is_origin_marker ? 'NOT TRACKED' : m.connection_state}</span>
         ${m.immersion_date ? `<span style="color: #9C9890;">Immersion:</span> <span>${m.immersion_date}</span>` : ''}
       </div>
       <div style="margin-top: 6px; font-size: 10px; color: #6B675F; text-align: right;">
-        ${m.is_origin_marker ? 'Static Geocoded Coordinate' : `GPS: ${new Date(m.last_gps_timestamp).toLocaleTimeString()}`}
+        ${m.is_origin_marker ? 'Origin Coordinates' : `GPS: ${new Date(m.last_gps_timestamp).toLocaleTimeString()}`}
       </div>
     </div>
   `;
