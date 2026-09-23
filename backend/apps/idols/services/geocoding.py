@@ -31,8 +31,12 @@ def is_within_hyderabad_bounds(lat: float, lon: float) -> bool:
 
 
 def is_generic_city_centroid(lat: float, lon: float) -> bool:
-    """Returns True if the coordinates are the generic Mecca Masjid / Hyderabad centroid."""
-    return (abs(lat - CITY_CENTROID_LAT) < 0.001 and abs(lon - CITY_CENTROID_LON) < 0.001)
+    """Returns True if coordinates match generic Mecca Masjid or Hyderabad district centroids."""
+    if abs(lat - 17.3605890) < 0.001 and abs(lon - 78.4740613) < 0.001:
+        return True
+    if abs(lat - 17.3887860) < 0.001 and abs(lon - 78.4610647) < 0.001:
+        return True
+    return False
 
 
 def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -265,6 +269,8 @@ def score_candidate(candidate: Dict[str, Any], idol: Idol, query_level: str) -> 
         return None
 
     res_type = candidate.get('type', '')
+    if res_type in ('city', 'administrative', 'state', 'county', 'country'):
+        return None
 
     # Determine confidence level
     # EXACT: Building, premise, place of worship, clinic, school
@@ -283,9 +289,6 @@ def score_candidate(candidate: Dict[str, Any], idol: Idol, query_level: str) -> 
     elif res_type in ('suburb', 'village', 'quarter', 'locality', 'hamlet') or query_level in ('village', 'locality'):
         conf = GeocodingConfidence.MEDIUM
     else:
-        # Generic city/administrative boundaries without street or suburb
-        if res_type in ('city', 'administrative', 'state'):
-            return None
         conf = GeocodingConfidence.MEDIUM
 
     return lat, lon, display_name, res_type, conf
@@ -324,16 +327,16 @@ def geocode_idol(idol: Idol, geocoder: Optional[BaseGeocoder] = None) -> Dict[st
     if addr_clean and pin and len(addr_clean) > 3 and addr_clean != street_clean:
         queries.append((f"{addr_clean}, {pin}, Telangana, India", "street"))
 
-    # Priority 4: Village / Sub-locality + PIN + Telangana, India
-    if village_clean and pin and len(village_clean) > 2:
+    # Priority 4: Village / Sub-locality + PIN + Telangana, India (never pure 'Hyderabad')
+    if village_clean and pin and len(village_clean) > 2 and village_clean.lower() not in ('hyderabad', 'telangana', 'india'):
         queries.append((f"{village_clean}, {pin}, Telangana, India", "village"))
 
     # Priority 5: Street + Locality + Hyderabad, Telangana (if PIN query yielded no results)
-    if street_clean and village_clean and len(street_clean) > 2 and street_clean.lower() != village_clean.lower():
+    if street_clean and village_clean and len(street_clean) > 2 and street_clean.lower() != village_clean.lower() and village_clean.lower() not in ('hyderabad', 'telangana', 'india'):
         queries.append((f"{street_clean}, {village_clean}, Hyderabad, Telangana, India", "street"))
 
     # Priority 6: Village / Sub-locality + Hyderabad, Telangana (approximate locality level)
-    if village_clean and len(village_clean) > 2 and village_clean.lower() != 'hyderabad':
+    if village_clean and len(village_clean) > 2 and village_clean.lower() not in ('hyderabad', 'telangana', 'india'):
         queries.append((f"{village_clean}, Hyderabad, Telangana, India", "locality"))
 
     seen_queries = set()
