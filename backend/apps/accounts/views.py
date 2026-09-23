@@ -1,4 +1,5 @@
 from django.contrib.auth import authenticate, login, logout
+from django.db import transaction
 from django.db.models import Q
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -99,6 +100,7 @@ class UserListCreateView(APIView):
         serializer = UserCreateUpdateSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
+            _log_account_event(request, 'USER_CREATED', user)
             return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -134,16 +136,17 @@ class UserDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
+        # Soft-disable only via this method — true hard deletion is on UserDeleteView.
         user = self.get_object(pk)
         if not user:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Do not allow deleting self
         if user.id == request.user.id:
             return Response({'error': 'Cannot disable your own administrative account.'}, status=status.HTTP_400_BAD_REQUEST)
 
         user.is_active = False
         user.save(update_fields=['is_active'])
+        _log_account_event(request, 'USER_DISABLED', user)
         return Response({'message': f'User {user.username} has been disabled.'})
 
 
@@ -164,6 +167,8 @@ class UserToggleActiveView(APIView):
 
         user.is_active = not user.is_active
         user.save(update_fields=['is_active'])
+        action = 'USER_ENABLED' if user.is_active else 'USER_DISABLED'
+        _log_account_event(request, action, user)
         return Response({
             'id': user.id,
             'username': user.username,
@@ -240,3 +245,133 @@ class AssignableOfficerDirectoryView(APIView):
             'count': len(serializer.data),
             'results': serializer.data
         })
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def _log_account_event(request, action: str, target_user: User) -> None:
+    """Record an administrative account lifecycle event in the audit trail."""
+    try:
+        from apps.audit.models import AuditEvent
+        ip = (
+            request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
+            or request.META.get('REMOTE_ADDR')
+        ) or None
+        full_name = f"{target_user.first_name} {target_user.last_name}".strip() or target_user.username
+        AuditEvent.objects.create(
+            actor=request.user if request.user.is_authenticated else None,
+            action=action,
+            target_model='User',
+            target_id=str(target_user.id),
+            details={
+                'username': target_user.username,
+                'full_name': full_name,
+                'police_id': target_user.police_id or '',
+                'role': target_user.role,
+                'police_station': target_user.police_station or '',
+            },
+            ip_address=ip,
+        )
+    except Exception:
+        # Audit failure must never block the primary operation.
+        pass
+
+
+class UserDeleteView(APIView):
+    """
+    Permanently deletes a user account.
+
+    Preflight invariants enforced atomically:
+    1. Caller must have manage_users capability.
+    2. Target user must exist (404 otherwise).
+    3. Caller cannot delete their own account (400).
+    4. Target must not have an active idol assignment (400 — reassign first).
+    5. Deletion is wrapped in a transaction; any ProtectedError rolls back
+       the whole operation and returns 409.
+
+    Historical data safety:
+    - Assignment.constable uses SET_NULL, so Assignment rows are preserved.
+    - Assignment.officer_name_snapshot and police_id_snapshot retain identity.
+    - TrackingSession → LocationPoint rows are preserved through the Assignment.
+    - IdolEvent.actor uses SET_NULL — procession events are preserved.
+    - AuditEvent.actor uses SET_NULL — audit trail is preserved.
+    - A final USER_DELETED audit record is written before the account is removed.
+    """
+    permission_classes = [CanManageUsers]
+
+    def delete(self, request, pk):
+        # --- 1. Target existence check ---
+        try:
+            user = User.objects.get(pk=pk)
+        except User.DoesNotExist:
+            return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # --- 2. Self-deletion guard ---
+        if user.id == request.user.id:
+            return Response(
+                {'error': 'You cannot delete your own account.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- 3. Active assignment block ---
+        from apps.assignments.models import Assignment
+        if Assignment.objects.filter(constable=user, is_active=True).exists():
+            return Response(
+                {
+                    'error': (
+                        'This officer has an active GPID assignment. '
+                        'Reassign or end the assignment before deleting this account.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- 4. Capture identity snapshot for audit record BEFORE deletion ---
+        full_name = f"{user.first_name} {user.last_name}".strip() or user.username
+        audit_details = {
+            'username': user.username,
+            'full_name': full_name,
+            'police_id': user.police_id or '',
+            'role': user.role,
+            'police_station': user.police_station or '',
+            'deleted_by': request.user.username,
+        }
+
+        # --- 5. Atomic hard deletion with ProtectedError guard ---
+        try:
+            with transaction.atomic():
+                # Write the audit record inside the transaction so a rollback
+                # removes it too — we do NOT want a USER_DELETED entry when
+                # deletion fails.
+                from apps.audit.models import AuditEvent
+                ip = (
+                    request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
+                    or request.META.get('REMOTE_ADDR')
+                ) or None
+                AuditEvent.objects.create(
+                    actor=request.user,
+                    action='USER_DELETED',
+                    target_model='User',
+                    target_id=str(user.id),
+                    details=audit_details,
+                    ip_address=ip,
+                )
+                user.delete()
+        except Exception as exc:
+            # Catches ProtectedError, IntegrityError, or any other DB-level
+            # protection. The transaction is rolled back; user record is intact.
+            return Response(
+                {
+                    'error': (
+                        'Account deletion failed due to protected historical records. '
+                        'The account and all associated operational history have been preserved. '
+                        f'Detail: {type(exc).__name__}'
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return Response({'message': f"User account '{full_name}' ({audit_details['username']}) deleted successfully."})
+

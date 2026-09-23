@@ -244,6 +244,16 @@ export async function toggleUserActive(id: number): Promise<{ id: number; userna
   return data;
 }
 
+export async function deleteUser(id: number): Promise<{ message: string }> {
+  const res = await apiFetch(`/auth/users/${id}/delete/`, {
+    method: 'DELETE',
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.error || 'Failed to delete user account', res.status);
+  return data;
+}
+
+
 // ---------------------------------------------------------------------------
 // Field Officers Directory
 // ---------------------------------------------------------------------------

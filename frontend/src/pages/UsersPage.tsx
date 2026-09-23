@@ -11,12 +11,14 @@ import {
   X,
   Filter,
   KeyRound,
+  Trash2,
 } from 'lucide-react';
 import {
   fetchUsers,
   createUser,
   updateUser,
   toggleUserActive,
+  deleteUser,
   fetchAuthoritativePoliceStations,
 } from '../api/client';
 import { User, UserRole, PoliceStationMaster } from '../types';
@@ -53,6 +55,11 @@ export const UsersPage: React.FC = () => {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Delete confirmation modal
+  const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Form fields
   const [formData, setFormData] = useState({
@@ -217,6 +224,31 @@ export const UsersPage: React.FC = () => {
     }
   };
 
+  const openDeleteModal = (u: User) => {
+    setDeleteTarget(u);
+    setDeleteError(null);
+  };
+
+  const closeDeleteModal = () => {
+    setDeleteTarget(null);
+    setDeleteError(null);
+    setDeleting(false);
+  };
+
+  const handleDeleteUser = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteUser(deleteTarget.id);
+      setUsers((prev) => prev.filter((u) => u.id !== deleteTarget.id));
+      closeDeleteModal();
+    } catch (err: any) {
+      setDeleteError(err.message || 'Deletion failed. Please try again.');
+      setDeleting(false);
+    }
+  };
+
   const filteredUsers = useMemo(() => {
     const q = search.toLowerCase().trim();
     return users.filter((u) => {
@@ -317,7 +349,7 @@ export const UsersPage: React.FC = () => {
               <span className="w-44">Police Station / Zone</span>
               <span className="w-32">Effective Rights</span>
               <span className="w-24">Status</span>
-              <span className="w-28 text-right">Actions</span>
+              <span className="w-36 text-right">Actions</span>
             </div>
 
             <div className="divide-y divide-border-subtle">
@@ -395,7 +427,7 @@ export const UsersPage: React.FC = () => {
                     </div>
 
                     {/* Actions */}
-                    <div className="w-28 flex items-center justify-end space-x-1.5">
+                    <div className="w-36 flex items-center justify-end space-x-1">
                       <button
                         onClick={() => openEditModal(u)}
                         title="Edit Officer & Permissions"
@@ -413,6 +445,13 @@ export const UsersPage: React.FC = () => {
                         }`}
                       >
                         {u.is_active ? <XCircle className="w-3.5 h-3.5" /> : <CheckCircle className="w-3.5 h-3.5" />}
+                      </button>
+                      <button
+                        onClick={() => openDeleteModal(u)}
+                        title="Permanently Delete Account"
+                        className="p-1.5 rounded hover:bg-status-critical-soft text-text-tertiary hover:text-status-critical transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
@@ -653,6 +692,73 @@ export const UsersPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md bg-elevated border border-status-critical/40 rounded-lg shadow-2xl overflow-hidden">
+            <div className="px-5 py-3.5 bg-base border-b border-status-critical/30 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Trash2 className="w-4 h-4 text-status-critical" />
+                <h2 className="text-sm font-semibold text-status-critical uppercase tracking-wider">Permanently Delete Account</h2>
+              </div>
+              <button
+                onClick={closeDeleteModal}
+                disabled={deleting}
+                className="text-text-tertiary hover:text-text-primary transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="p-3 bg-status-critical-soft border border-status-critical/25 rounded-md space-y-1">
+                <p className="font-semibold text-text-primary">
+                  You are about to permanently delete the account for:
+                </p>
+                <p className="mono text-text-secondary">
+                  {`${deleteTarget.first_name || ''} ${deleteTarget.last_name || ''}`.trim() || deleteTarget.username}
+                  {' '}(<span className="text-accent">@{deleteTarget.username}</span>)
+                  {deleteTarget.police_id ? ` — ${deleteTarget.police_id}` : ''}
+                </p>
+              </div>
+
+              <ul className="space-y-1 text-text-secondary text-[11px] pl-1">
+                <li className="flex items-start gap-1.5"><span className="text-status-critical mt-0.5">▸</span><span>This action is <strong className="text-text-primary">permanent and irreversible</strong>.</span></li>
+                <li className="flex items-start gap-1.5"><span className="text-status-active mt-0.5">▸</span><span>All historical assignment, GPS tracking, and procession records will be <strong className="text-text-primary">preserved</strong> with officer identity snapshots.</span></li>
+                <li className="flex items-start gap-1.5"><span className="text-status-active mt-0.5">▸</span><span>Audit trail events attributed to this officer will remain intact.</span></li>
+                <li className="flex items-start gap-1.5"><span className="text-status-critical mt-0.5">▸</span><span>Active GPID assignments must be <strong className="text-text-primary">reassigned or ended</strong> before deletion is permitted.</span></li>
+              </ul>
+
+              {deleteError && (
+                <div className="p-3 bg-status-critical-soft border border-status-critical/30 rounded-md flex items-start space-x-2 text-status-critical">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{deleteError}</span>
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-border-subtle flex items-center justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={closeDeleteModal}
+                  disabled={deleting}
+                  className="px-4 py-2 rounded-md border border-border-default text-text-secondary hover:text-text-primary hover:bg-elevated-2 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteUser}
+                  disabled={deleting}
+                  className="px-4 py-2 bg-status-critical hover:opacity-90 disabled:opacity-50 text-white font-semibold rounded-md transition-opacity cursor-pointer flex items-center space-x-1.5"
+                >
+                  {deleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{deleting ? 'Deleting…' : 'Permanently Delete'}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

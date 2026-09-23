@@ -331,3 +331,188 @@ class UserManagementAndOfficerDirectoryTests(TestCase):
         self.assertGreaterEqual(res.data['count'], 1)
         names = [s['ps_name'] for s in res.data['results']]
         self.assertIn('Charminar', names)
+
+
+class UserAccountDeletionTests(TestCase):
+    """
+    Tests covering the permanent account deletion feature.
+
+    Invariants verified:
+    1.  MAIN_OFFICER can hard-delete an unassigned account.
+    2.  Deleted user can no longer log in.
+    3.  Self-deletion is rejected with 400.
+    4.  SHO cannot delete accounts (insufficient permission → 403).
+    5.  Constable with active assignment is blocked → 400.
+    6.  After deletion: Assignment row is preserved (constable SET_NULL).
+    7.  After deletion: officer_name_snapshot and police_id_snapshot are retained.
+    8.  After deletion: TrackingSession row is preserved.
+    9.  After deletion: LocationPoint rows are preserved.
+    10. After deletion: AuditEvent USER_DELETED entry exists.
+    11. Deleting non-existent user returns 404.
+    12. Assignment snapshot is populated on assignment creation.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = User.objects.create_user(
+            username='del_admin', password='AdminPass123!',
+            role=UserRole.MAIN_OFFICER
+        )
+        self.sho = User.objects.create_user(
+            username='del_sho', password='ShoPass123!',
+            role=UserRole.SHO, police_station='Charminar'
+        )
+        self.victim = User.objects.create_user(
+            username='del_victim', password='VictimPass123!',
+            first_name='Ravi', last_name='Kumar',
+            role=UserRole.CONSTABLE, police_station='Charminar',
+            police_id='PC-9999'
+        )
+        self.idol = Idol.objects.create(
+            gpid='HYDTEST0001',
+            name='Test Idol',
+            police_station='Charminar',
+            zone='Charminar'
+        )
+
+    def _delete_url(self, user_id):
+        return f'/api/v1/auth/users/{user_id}/delete/'
+
+    # --- Test 1: Successful deletion of unassigned account ---
+    def test_admin_can_delete_unassigned_constable(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.delete(self._delete_url(self.victim.id))
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(User.objects.filter(id=self.victim.id).exists())
+
+    # --- Test 2: Deleted user cannot log in ---
+    def test_deleted_user_cannot_login(self):
+        uid = self.victim.id
+        self.client.force_authenticate(user=self.admin)
+        self.client.delete(self._delete_url(uid))
+        # Reset client auth and attempt login
+        self.client.force_authenticate(user=None)
+        res = self.client.post('/api/v1/auth/login/', {
+            'username': 'del_victim', 'password': 'VictimPass123!'
+        })
+        self.assertIn(res.status_code, [400, 401, 403])
+
+    # --- Test 3: Self-deletion rejected ---
+    def test_self_deletion_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.delete(self._delete_url(self.admin.id))
+        self.assertEqual(res.status_code, 400)
+        self.assertTrue(User.objects.filter(id=self.admin.id).exists())
+
+    # --- Test 4: SHO cannot delete accounts ---
+    def test_sho_cannot_delete_accounts(self):
+        self.client.force_authenticate(user=self.sho)
+        res = self.client.delete(self._delete_url(self.victim.id))
+        self.assertEqual(res.status_code, 403)
+        self.assertTrue(User.objects.filter(id=self.victim.id).exists())
+
+    # --- Test 5: Constable with active assignment is blocked ---
+    def test_cannot_delete_constable_with_active_assignment(self):
+        from apps.assignments.models import Assignment
+        Assignment.assign_constable(idol=self.idol, constable=self.victim, assigned_by=self.admin)
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.delete(self._delete_url(self.victim.id))
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('active GPID assignment', res.data['error'])
+        self.assertTrue(User.objects.filter(id=self.victim.id).exists())
+
+    # --- Test 6: Assignment row is preserved after deletion (SET_NULL) ---
+    def test_assignment_preserved_after_user_deletion(self):
+        from apps.assignments.models import Assignment
+        assignment = Assignment.assign_constable(
+            idol=self.idol, constable=self.victim, assigned_by=self.admin
+        )
+        # End the assignment so deletion is not blocked
+        assignment.is_active = False
+        assignment.save(update_fields=['is_active'])
+
+        self.client.force_authenticate(user=self.admin)
+        self.client.delete(self._delete_url(self.victim.id))
+
+        # Assignment row must survive
+        assignment.refresh_from_db()
+        self.assertIsNone(assignment.constable)  # SET_NULL applied
+        self.assertEqual(assignment.idol.gpid, 'HYDTEST0001')
+
+    # --- Test 7: Snapshot fields retain officer identity after deletion ---
+    def test_officer_snapshot_retained_after_deletion(self):
+        from apps.assignments.models import Assignment
+        assignment = Assignment.assign_constable(
+            idol=self.idol, constable=self.victim, assigned_by=self.admin
+        )
+        assignment.is_active = False
+        assignment.save(update_fields=['is_active'])
+
+        self.client.force_authenticate(user=self.admin)
+        self.client.delete(self._delete_url(self.victim.id))
+
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.officer_name_snapshot, 'Ravi Kumar')
+        self.assertEqual(assignment.police_id_snapshot, 'PC-9999')
+
+    # --- Test 8: TrackingSession row is preserved after user deletion ---
+    def test_tracking_session_preserved_after_user_deletion(self):
+        from apps.assignments.models import Assignment
+        from apps.tracking.models import TrackingSession
+        assignment = Assignment.assign_constable(
+            idol=self.idol, constable=self.victim, assigned_by=self.admin
+        )
+        session = TrackingSession.objects.create(assignment=assignment, device_info='TestDevice')
+        assignment.is_active = False
+        assignment.save(update_fields=['is_active'])
+
+        self.client.force_authenticate(user=self.admin)
+        self.client.delete(self._delete_url(self.victim.id))
+
+        self.assertTrue(TrackingSession.objects.filter(id=session.id).exists())
+
+    # --- Test 9: LocationPoint rows are preserved after user deletion ---
+    def test_location_points_preserved_after_user_deletion(self):
+        from apps.assignments.models import Assignment
+        from apps.tracking.models import TrackingSession, LocationPoint
+        from django.utils import timezone
+        assignment = Assignment.assign_constable(
+            idol=self.idol, constable=self.victim, assigned_by=self.admin
+        )
+        session = TrackingSession.objects.create(assignment=assignment, device_info='TestDevice')
+        now = timezone.now()
+        lp = LocationPoint.objects.create(
+            session=session, latitude=17.36, longitude=78.47, recorded_at=now
+        )
+        assignment.is_active = False
+        assignment.save(update_fields=['is_active'])
+
+        self.client.force_authenticate(user=self.admin)
+        self.client.delete(self._delete_url(self.victim.id))
+
+        self.assertTrue(LocationPoint.objects.filter(id=lp.id).exists())
+
+    # --- Test 10: AuditEvent USER_DELETED entry is written ---
+    def test_audit_event_written_on_user_deletion(self):
+        from apps.audit.models import AuditEvent
+        self.client.force_authenticate(user=self.admin)
+        self.client.delete(self._delete_url(self.victim.id))
+        event = AuditEvent.objects.filter(action='USER_DELETED').first()
+        self.assertIsNotNone(event)
+        self.assertEqual(event.details.get('username'), 'del_victim')
+
+    # --- Test 11: Deleting non-existent user returns 404 ---
+    def test_delete_nonexistent_user_returns_404(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.delete(self._delete_url(99999))
+        self.assertEqual(res.status_code, 404)
+
+    # --- Test 12: Assignment snapshot is populated at creation ---
+    def test_assignment_snapshot_populated_at_creation(self):
+        from apps.assignments.models import Assignment
+        assignment = Assignment.assign_constable(
+            idol=self.idol, constable=self.victim, assigned_by=self.admin
+        )
+        self.assertEqual(assignment.officer_name_snapshot, 'Ravi Kumar')
+        self.assertEqual(assignment.police_id_snapshot, 'PC-9999')
+

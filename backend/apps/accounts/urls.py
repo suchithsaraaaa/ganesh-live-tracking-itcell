@@ -6,6 +6,7 @@ from .views import (
     UserListCreateView,
     UserDetailView,
     UserToggleActiveView,
+    UserDeleteView,
     AssignableOfficerDirectoryView
 )
 
@@ -16,5 +17,6 @@ urlpatterns = [
     path('users/', UserListCreateView.as_view(), name='auth-users-list'),
     path('users/<int:pk>/', UserDetailView.as_view(), name='auth-users-detail'),
     path('users/<int:pk>/toggle-active/', UserToggleActiveView.as_view(), name='auth-users-toggle-active'),
+    path('users/<int:pk>/delete/', UserDeleteView.as_view(), name='auth-users-delete'),
     path('officers/', AssignableOfficerDirectoryView.as_view(), name='auth-officers-directory'),
 ]

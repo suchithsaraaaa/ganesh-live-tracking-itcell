@@ -16,9 +16,16 @@ class Assignment(models.Model):
     )
     constable = models.ForeignKey(
         User,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name='assignments'
     )
+    # Historical identity snapshot — preserved when the officer account is deleted.
+    # These fields allow the assignment record (and its linked TrackingSession/
+    # LocationPoint history) to retain officer attribution even after account removal.
+    officer_name_snapshot = models.CharField(max_length=255, blank=True, default='')
+    police_id_snapshot = models.CharField(max_length=50, blank=True, default='')
     assigned_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
@@ -65,9 +72,15 @@ class Assignment(models.Model):
             ),
         ]
 
+    def _constable_display(self):
+        """Returns constable identifier, falling back to snapshot when account is deleted."""
+        if self.constable_id is not None:
+            return self.constable.username
+        return self.officer_name_snapshot or 'Deleted Officer'
+
     def __str__(self):
         status = "ACTIVE" if self.is_active else "ENDED"
-        return f"[{status}] {self.constable.username} -> {self.idol.gpid}"
+        return f"[{status}] {self._constable_display()} -> {self.idol.gpid}"
 
     @classmethod
     @transaction.atomic
@@ -82,12 +95,16 @@ class Assignment(models.Model):
         # End any existing active assignment for this constable
         cls.objects.filter(constable=constable, is_active=True).update(is_active=False, ended_at=now)
 
+        # Snapshot officer identity at assignment time for historical preservation.
+        full_name = f"{constable.first_name} {constable.last_name}".strip() or constable.username
         assignment = cls.objects.create(
             idol=idol,
             constable=constable,
             assigned_by=assigned_by,
             started_at=now,
-            is_active=True
+            is_active=True,
+            officer_name_snapshot=full_name,
+            police_id_snapshot=constable.police_id or '',
         )
 
         try:
@@ -144,7 +161,7 @@ class Assignment(models.Model):
                 zone=self.idol.zone,
                 actor=actor,
                 metadata={
-                    'previous_constable': self.constable.username,
+                    'previous_constable': self._constable_display(),
                     'new_constable': new_constable.username,
                     'reason': reason
                 }
@@ -166,4 +183,7 @@ class Assignment(models.Model):
         ).filter(
             models.Q(ended_at__isnull=True) | models.Q(ended_at__gte=dt)
         ).order_by('-started_at').first()
-        return assign.constable if assign else None
+        if assign is None:
+            return None
+        # Return live constable if account still exists, else return snapshot attribution.
+        return assign.constable
