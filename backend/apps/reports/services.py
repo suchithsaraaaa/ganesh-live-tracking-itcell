@@ -357,9 +357,11 @@ def generate_idol_pdf_report(gpid, session_id=None, generated_by_user=None):
             start_str = timezone.localtime(a.started_at).strftime('%d-%b %H:%M') if a.started_at else 'N/A'
             end_str = timezone.localtime(a.ended_at).strftime('%d-%b %H:%M') if a.ended_at else 'ACTIVE'
             details = "ACTIVE ASSIGNMENT" if a.is_active else f"Handover to {a.handover_to.username if a.handover_to else 'N/A'}: {a.handover_reason}"
+            constable_name = (a.constable.get_full_name() or a.constable.username) if a.constable else (a.officer_name_snapshot or 'Historical Officer')
+            constable_pid = (a.constable.police_id or 'N/A') if a.constable else (a.police_id_snapshot or 'N/A')
             assign_rows.append([
-                Paragraph(a.constable.get_full_name() or a.constable.username, body_style),
-                Paragraph(a.constable.police_id or 'N/A', body_style),
+                Paragraph(constable_name, body_style),
+                Paragraph(constable_pid, body_style),
                 Paragraph(start_str, body_style),
                 Paragraph(end_str, body_style),
                 Paragraph(details, body_style),
