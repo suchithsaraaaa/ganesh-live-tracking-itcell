@@ -20,7 +20,7 @@ import {
   fetchAuthoritativePoliceStations,
   fetchAssignableRegistry,
   fetchAssignableIdolDetail,
-  fetchAssignableOfficers,
+  fetchEligibleOfficersForGpid,
   assignConstable,
   endAssignment,
   getAssignmentExcelExportUrl,
@@ -29,10 +29,12 @@ import {
   AssignableIdol,
   AssignableIdolDetail,
   AssignableSummary,
-  AssignableOfficer,
+  EligibleOfficer,
+  EligibleOfficersResponse,
   PoliceStationMaster,
   HeightBucketFilter,
   AssignmentStatusFilter,
+  VisarjanDateFilter,
 } from '../types';
 import { LoadingState, EmptyState, ErrorState } from '../components/shared/States';
 
@@ -45,6 +47,8 @@ export const AssignmentsPage: React.FC = () => {
   const [selectedStation, setSelectedStation] = useState<string>('All Police Stations');
   const [selectedHeight, setSelectedHeight] = useState<HeightBucketFilter>('all_15_plus');
   const [selectedStatus, setSelectedStatus] = useState<AssignmentStatusFilter>('all');
+  const [visarjanDateMode, setVisarjanDateMode] = useState<VisarjanDateFilter>('all');
+  const [customVisarjanDate, setCustomVisarjanDate] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -67,7 +71,8 @@ export const AssignmentsPage: React.FC = () => {
 
   // Dedicated Assign Officer Modal State
   const [assignTarget, setAssignTarget] = useState<AssignableIdol | null>(null);
-  const [officers, setOfficers] = useState<AssignableOfficer[]>([]);
+  const [eligibleResponse, setEligibleResponse] = useState<EligibleOfficersResponse | null>(null);
+  const [officers, setOfficers] = useState<EligibleOfficer[]>([]);
   const [loadingOfficers, setLoadingOfficers] = useState<boolean>(false);
   const [officersError, setOfficersError] = useState<string | null>(null);
   const [officerFilterQuery, setOfficerFilterQuery] = useState<string>('');
@@ -137,6 +142,14 @@ export const AssignmentsPage: React.FC = () => {
     setCurrentPage(1);
   };
 
+  // Authoritative Visarjan Date computation
+  const computedVisarjanDate = useMemo(() => {
+    if (visarjanDateMode === 'today') return 'today';
+    if (visarjanDateMode === 'tomorrow') return 'tomorrow';
+    if (visarjanDateMode === 'custom' && customVisarjanDate) return customVisarjanDate;
+    return undefined;
+  }, [visarjanDateMode, customVisarjanDate]);
+
   // Primary Data Fetcher for Registry
   const loadRegistry = useCallback(async () => {
     setLoading(true);
@@ -149,6 +162,7 @@ export const AssignmentsPage: React.FC = () => {
         police_station: selectedStation,
         height_bucket: selectedHeight,
         assignment_status: selectedStatus,
+        visarjan_date: computedVisarjanDate,
         search: debouncedSearch.trim() || undefined,
       });
       setRegistryData(data.results || []);
@@ -159,7 +173,7 @@ export const AssignmentsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [currentPage, selectedZone, selectedStation, selectedHeight, selectedStatus, debouncedSearch]);
+  }, [currentPage, selectedZone, selectedStation, selectedHeight, selectedStatus, computedVisarjanDate, debouncedSearch]);
 
   useEffect(() => {
     if (activeTab === 'console') {
@@ -188,7 +202,7 @@ export const AssignmentsPage: React.FC = () => {
     setDetailError(null);
   };
 
-  // Open Dedicated Assign Modal
+  // Open Dedicated Assign Modal (authoritative GPID-context endpoint)
   const handleOpenAssignModal = async (idol: AssignableIdol) => {
     setAssignTarget(idol);
     setSelectedOfficerId(null);
@@ -196,15 +210,13 @@ export const AssignmentsPage: React.FC = () => {
     setAssignError(null);
     setLoadingOfficers(true);
     setOfficersError(null);
+    setEligibleResponse(null);
     try {
-      // Fetch only available, unassigned ground staff for this station
-      const data = await fetchAssignableOfficers({
-        policeStation: idol.police_station,
-        availableOnly: true,
-      });
-      setOfficers(data.results || []);
+      const data = await fetchEligibleOfficersForGpid(idol.gpid);
+      setEligibleResponse(data);
+      setOfficers(data.officers || []);
     } catch (err: any) {
-      setOfficersError(err.message || 'Failed to load available officers.');
+      setOfficersError(err.message || 'Failed to load eligible ground staff.');
     } finally {
       setLoadingOfficers(false);
     }
@@ -216,6 +228,7 @@ export const AssignmentsPage: React.FC = () => {
     setSelectedOfficerId(null);
     setOfficerFilterQuery('');
     setAssignError(null);
+    setEligibleResponse(null);
   };
 
   // Confirm Assignment
@@ -291,7 +304,9 @@ export const AssignmentsPage: React.FC = () => {
     if (!q) return officers;
     return officers.filter(
       (o) =>
-        o.name.toLowerCase().includes(q) ||
+        (o.name && o.name.toLowerCase().includes(q)) ||
+        (o.first_name && o.first_name.toLowerCase().includes(q)) ||
+        (o.last_name && o.last_name.toLowerCase().includes(q)) ||
         o.username.toLowerCase().includes(q) ||
         (o.police_id && o.police_id.toLowerCase().includes(q))
     );
@@ -304,6 +319,7 @@ export const AssignmentsPage: React.FC = () => {
       police_station: selectedStation,
       height_bucket: selectedHeight,
       assignment_status: selectedStatus,
+      visarjan_date: computedVisarjanDate,
       search: debouncedSearch.trim() || undefined,
     });
     window.open(url, '_blank');
@@ -315,6 +331,8 @@ export const AssignmentsPage: React.FC = () => {
     setSelectedStation('All Police Stations');
     setSelectedHeight('all_15_plus');
     setSelectedStatus('all');
+    setVisarjanDateMode('all');
+    setCustomVisarjanDate('');
     setSearchQuery('');
     setCurrentPage(1);
   };
@@ -324,6 +342,7 @@ export const AssignmentsPage: React.FC = () => {
     selectedStation !== 'All Police Stations' ||
     selectedHeight !== 'all_15_plus' ||
     selectedStatus !== 'all' ||
+    visarjanDateMode !== 'all' ||
     Boolean(searchQuery.trim());
 
   // Height Badge Visual Styling
@@ -416,7 +435,7 @@ export const AssignmentsPage: React.FC = () => {
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Filter / Control Bar */}
           <div className="px-6 py-3 bg-base border-b border-border-subtle shrink-0">
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-2.5 items-center">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 items-start">
               {/* Zone Filter */}
               <div>
                 <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
@@ -484,6 +503,37 @@ export const AssignmentsPage: React.FC = () => {
                     26 FT+ ({summary ? summary.count_26_plus : '…'})
                   </option>
                 </select>
+              </div>
+
+              {/* Visarjan Date Filter */}
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
+                  Visarjan Date
+                </label>
+                <select
+                  value={visarjanDateMode}
+                  onChange={(e) => {
+                    setVisarjanDateMode(e.target.value as VisarjanDateFilter);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent font-medium"
+                >
+                  <option value="all">All Dates</option>
+                  <option value="today">Today</option>
+                  <option value="tomorrow">Tomorrow</option>
+                  <option value="custom">Custom Date…</option>
+                </select>
+                {visarjanDateMode === 'custom' && (
+                  <input
+                    type="date"
+                    value={customVisarjanDate}
+                    onChange={(e) => {
+                      setCustomVisarjanDate(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="w-full mt-1 px-2 py-1 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent mono"
+                  />
+                )}
               </div>
 
               {/* Assignment Status Filter */}
@@ -643,6 +693,7 @@ export const AssignmentsPage: React.FC = () => {
                         <th className="px-4 py-3">GPID</th>
                         <th className="px-4 py-3">Pandal / Idol Name</th>
                         <th className="px-4 py-3">Height</th>
+                        <th className="px-4 py-3">Visarjan Date</th>
                         <th className="px-4 py-3">Zone</th>
                         <th className="px-4 py-3">Police Station</th>
                         <th className="px-4 py-3">Assignment</th>
@@ -685,6 +736,11 @@ export const AssignmentsPage: React.FC = () => {
                             {/* Height Badge */}
                             <td className="px-4 py-3">
                               {getHeightBadge(idol.height_bucket, idol.idol_height)}
+                            </td>
+
+                            {/* Visarjan Date */}
+                            <td className="px-4 py-3 text-text-secondary mono text-[11px] whitespace-nowrap">
+                              {idol.visarjan_date || idol.immersion_date || '—'}
                             </td>
 
                             {/* Zone */}
@@ -1046,6 +1102,14 @@ export const AssignmentsPage: React.FC = () => {
                       </div>
                       <div className="col-span-2">
                         <span className="text-text-tertiary uppercase text-[10px] block font-bold">
+                          Authoritative Visarjan Date
+                        </span>
+                        <span className="font-semibold text-accent mono">
+                          {drawerDetail.visarjan_date || drawerDetail.immersion_date || '—'}
+                        </span>
+                      </div>
+                      <div className="col-span-2">
+                        <span className="text-text-tertiary uppercase text-[10px] block font-bold">
                           Origin Address
                         </span>
                         <span className="text-text-secondary">{drawerDetail.address}</span>
@@ -1355,7 +1419,7 @@ export const AssignmentsPage: React.FC = () => {
             </div>
 
             {/* Target Idol Summary */}
-            <div className="px-5 py-3 bg-elevated-2 border-b border-border-subtle grid grid-cols-2 gap-2 text-[11px] shrink-0">
+            <div className="px-5 py-3 bg-elevated-2 border-b border-border-subtle grid grid-cols-3 gap-2 text-[11px] shrink-0">
               <div>
                 <span className="text-text-tertiary uppercase text-[10px] block font-bold">GPID</span>
                 <span className="font-bold text-accent mono">{assignTarget.gpid}</span>
@@ -1367,10 +1431,16 @@ export const AssignmentsPage: React.FC = () => {
                 </span>
               </div>
               <div>
+                <span className="text-text-tertiary uppercase text-[10px] block font-bold">Visarjan Date</span>
+                <span className="font-semibold text-accent mono">
+                  {assignTarget.visarjan_date || assignTarget.immersion_date || '—'}
+                </span>
+              </div>
+              <div>
                 <span className="text-text-tertiary uppercase text-[10px] block font-bold">Zone</span>
                 <span className="text-text-secondary">{assignTarget.zone}</span>
               </div>
-              <div>
+              <div className="col-span-2">
                 <span className="text-text-tertiary uppercase text-[10px] block font-bold">
                   Police Station
                 </span>
@@ -1380,6 +1450,15 @@ export const AssignmentsPage: React.FC = () => {
               </div>
             </div>
 
+            {eligibleResponse?.is_already_assigned && (
+              <div className="mx-5 mt-3 p-3 bg-amber-500/15 border border-amber-500/30 rounded text-amber-300 text-xs flex items-start space-x-2 shrink-0">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+                <span>
+                  This idol is currently assigned to <strong>{eligibleResponse.current_assignment?.full_name || eligibleResponse.current_assignment?.username}</strong>. Assigning a new officer will reassign duty.
+                </span>
+              </div>
+            )}
+
             {/* Officer Selection List */}
             <div className="p-5 space-y-3 flex-1 overflow-y-auto">
               <div className="flex items-center justify-between">
@@ -1387,7 +1466,7 @@ export const AssignmentsPage: React.FC = () => {
                   Eligible Available Ground Staff
                 </label>
                 <span className="text-[10px] text-text-tertiary mono">
-                  {filteredModalOfficers.length} available
+                  {filteredModalOfficers.length} available in {assignTarget.police_station}
                 </span>
               </div>
 
@@ -1416,15 +1495,21 @@ export const AssignmentsPage: React.FC = () => {
                     <span>{officersError}</span>
                   </div>
                 ) : filteredModalOfficers.length === 0 ? (
-                  <div className="py-8 text-center text-text-tertiary text-xs space-y-1">
-                    <p className="font-semibold">No eligible unassigned constables found.</p>
-                    <p className="text-[11px]">
-                      All officers in this station may already have active assignments.
+                  <div className="py-8 px-4 text-center text-text-tertiary text-xs space-y-2">
+                    <AlertCircle className="w-6 h-6 text-amber-400 mx-auto" />
+                    <p className="font-semibold text-text-primary text-sm">No eligible unassigned constables found</p>
+                    <p className="text-[11px] leading-relaxed max-w-sm mx-auto">
+                      No active, unassigned ground staff (Constables) registered under{' '}
+                      <span className="font-semibold text-text-secondary">{assignTarget.police_station}</span> ({assignTarget.zone}).
+                    </p>
+                    <p className="text-[10px] text-text-tertiary">
+                      Use <strong>User Management</strong> to create a new Constable or check inactive accounts for this police station.
                     </p>
                   </div>
                 ) : (
                   filteredModalOfficers.map((officer) => {
                     const isSelected = selectedOfficerId === officer.id;
+                    const officerDisplayName = officer.name || `${officer.first_name || ''} ${officer.last_name || ''}`.trim() || officer.username;
                     return (
                       <div
                         key={officer.id}
@@ -1447,10 +1532,10 @@ export const AssignmentsPage: React.FC = () => {
                           </div>
                           <div className="min-w-0">
                             <div className="font-bold text-text-primary text-xs truncate">
-                              {officer.name || officer.username}
+                              {officerDisplayName}
                             </div>
                             <div className="text-[10px] text-text-tertiary mono">
-                              ID: {officer.police_id || 'N/A'} &bull; {officer.police_station}
+                              Badge ID: {officer.police_id || 'N/A'} &bull; {officer.police_station} &bull; {officer.zone}
                             </div>
                           </div>
                         </div>

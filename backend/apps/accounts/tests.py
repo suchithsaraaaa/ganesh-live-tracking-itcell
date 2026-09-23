@@ -213,11 +213,13 @@ class UserManagementAndOfficerDirectoryTests(TestCase):
         self.constable = User.objects.create_user(
             username='pc_cmr_1', password='PcPass123!',
             role=UserRole.CONSTABLE, police_station='Charminar',
+            zone='Charminar',
             police_id='PC-1001', phone_number='9876543210'
         )
         self.constable_mlp = User.objects.create_user(
             username='pc_mlp_1', password='PcPass123!',
             role=UserRole.CONSTABLE, police_station='Malakpet',
+            zone='Charminar',
             police_id='PC-1002', phone_number='9876543211'
         )
         self.idol = Idol.objects.create(
@@ -515,4 +517,98 @@ class UserAccountDeletionTests(TestCase):
         )
         self.assertEqual(assignment.officer_name_snapshot, 'Ravi Kumar')
         self.assertEqual(assignment.police_id_snapshot, 'PC-9999')
+
+
+class OfficerCreationCascadingTests(TestCase):
+    def setUp(self):
+        from apps.geography.models import PoliceStationBoundary
+        self.client = APIClient()
+        self.admin = User.objects.create_user(
+            username='admin_boss', password='password123', role=UserRole.MAIN_OFFICER
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        PoliceStationBoundary.objects.create(
+            ps_name='Charminar',
+            ps_code='CMNR',
+            zone='Charminar',
+            division='Charminar',
+        )
+        PoliceStationBoundary.objects.create(
+            ps_name='Banjara Hills',
+            ps_code='BJRH',
+            zone='Jubilee Hills',
+            division='Banjara Hills',
+        )
+
+    def test_constable_creation_missing_zone_or_station_fails(self):
+        # Missing zone
+        res = self.client.post('/api/v1/auth/users/', {
+            'username': 'pc_no_zone',
+            'password': 'password123',
+            'role': 'CONSTABLE',
+            'police_station': 'Charminar',
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('Zone is required for Constable', str(res.data))
+
+        # Missing police station
+        res2 = self.client.post('/api/v1/auth/users/', {
+            'username': 'pc_no_ps',
+            'password': 'password123',
+            'role': 'CONSTABLE',
+            'zone': 'Charminar',
+        })
+        self.assertEqual(res2.status_code, 400)
+        self.assertIn('Police Station is required for Constable', str(res2.data))
+
+    def test_constable_creation_mismatched_station_and_zone_fails(self):
+        res = self.client.post('/api/v1/auth/users/', {
+            'username': 'pc_mismatch',
+            'password': 'password123',
+            'role': 'CONSTABLE',
+            'zone': 'Charminar',
+            'police_station': 'Banjara Hills',
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('does not belong to', str(res.data))
+
+    def test_constable_creation_valid_station_and_zone_succeeds(self):
+        res = self.client.post('/api/v1/auth/users/', {
+            'username': 'pc_valid',
+            'password': 'password123',
+            'role': 'CONSTABLE',
+            'zone': 'Charminar',
+            'police_station': 'Charminar',
+            'first_name': 'Ramesh',
+            'last_name': 'Patel',
+            'police_id': 'PC-8888',
+        })
+        self.assertEqual(res.status_code, 201)
+        created_user = User.objects.get(username='pc_valid')
+        self.assertEqual(created_user.zone, 'Charminar')
+        self.assertEqual(created_user.police_station, 'Charminar')
+
+    def test_assignable_officers_directory_filter_by_zone(self):
+        User.objects.create_user(
+            username='pc_cmr_test',
+            password='password123',
+            role=UserRole.CONSTABLE,
+            zone='Charminar',
+            police_station='Charminar',
+        )
+        User.objects.create_user(
+            username='pc_bjrh_test',
+            password='password123',
+            role=UserRole.CONSTABLE,
+            zone='Jubilee Hills',
+            police_station='Banjara Hills',
+        )
+
+        res = self.client.get('/api/v1/auth/officers/?zone=Charminar')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertIn('pc_cmr_test', usernames)
+        self.assertNotIn('pc_bjrh_test', usernames)
+
 

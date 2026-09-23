@@ -275,6 +275,23 @@ class AssignableIdolRegistryView(APIView):
             elif astat == 'unassigned':
                 qs = qs.exclude(id__in=active_assigned_idol_ids)
 
+        # Visarjan Date filter (AND composition)
+        visarjan_date = request.query_params.get('visarjan_date')
+        if visarjan_date and visarjan_date not in ['All Dates', 'all', '']:
+            vdate_clean = visarjan_date.lower().strip()
+            from datetime import date, timedelta, datetime
+            today = date.today()
+            if vdate_clean == 'today':
+                qs = qs.filter(immersion_date=today)
+            elif vdate_clean == 'tomorrow':
+                qs = qs.filter(immersion_date=today + timedelta(days=1))
+            else:
+                try:
+                    target_date = datetime.strptime(vdate_clean, '%Y-%m-%d').date()
+                    qs = qs.filter(immersion_date=target_date)
+                except ValueError:
+                    pass
+
         # Rule 8: Secondary search (respects all active filters & 15 FT rule)
         search = request.query_params.get('search')
         if search:
@@ -454,6 +471,8 @@ class AssignableIdolDetailView(APIView):
             'latitude': float(idol.latitude) if idol.latitude else None,
             'longitude': float(idol.longitude) if idol.longitude else None,
             'destination': idol.river_name or idol.lake_type or 'Visarjan Site',
+            'visarjan_date': idol.immersion_date.isoformat() if idol.immersion_date else None,
+            'immersion_date': idol.immersion_date.isoformat() if idol.immersion_date else None,
             'procession_state': idol.procession_state,
             'connection_state': conn_state,
             'last_gps_timestamp': latest_pt.recorded_at.isoformat() if latest_pt else (idol.updated_at.isoformat() if idol.updated_at else None),
@@ -473,6 +492,84 @@ class AssignableIdolDetailView(APIView):
             } if can_view_contact else None,
             'milestones': milestones,
             'events': timeline_events,
+        })
+
+
+class AssignableEligibleOfficersView(APIView):
+    """
+    Authoritative endpoint returning eligible ground staff (Constables)
+    strictly for a specific GPID context.
+    Matches:
+    - role == 'CONSTABLE'
+    - is_active == True
+    - police_station == idol.police_station
+    - zone == idol.zone
+    - No active assignment
+    """
+    permission_classes = [CanAssignFieldOfficers]
+
+    def get(self, request, gpid):
+        from apps.idols.models import Idol
+        from apps.accounts.models import User
+        from apps.accounts.serializers import AssignableOfficerSerializer
+
+        try:
+            idol = Idol.objects.get(gpid__iexact=gpid.strip())
+        except Idol.DoesNotExist:
+            return Response({'error': f'Idol with GPID {gpid} not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Jurisdiction check
+        if not filter_by_jurisdiction(Idol.objects.filter(id=idol.id), request.user).exists():
+            return Response({'error': 'You do not have jurisdiction over this idol.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Rule 1 & 29: Absolute Eligibility Rule — strictly reject <15 FT
+        if not idol.idol_height or idol.idol_height < 15:
+            return Response({
+                'error': f'Idol {idol.gpid} has height {idol.idol_height or 0} FT. Only 15 FT+ idols are eligible for officer assignments.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Currently assigned constables across the entire system
+        active_assigned_constable_ids = set(
+            Assignment.objects.filter(is_active=True).values_list('constable_id', flat=True)
+        )
+
+        # Constables matching idol's police station and zone
+        qs = User.objects.filter(
+            role='CONSTABLE',
+            is_active=True,
+            police_station__iexact=idol.police_station.strip(),
+            zone__iexact=idol.zone.strip(),
+        ).exclude(
+            id__in=active_assigned_constable_ids
+        ).order_by('first_name', 'last_name', 'username')
+
+        officers_data = AssignableOfficerSerializer(qs, many=True).data
+
+        # Current active assignment for this idol, if any
+        current_assignment = Assignment.objects.filter(idol=idol, is_active=True).select_related('constable').first()
+        assigned_officer_data = None
+        if current_assignment and current_assignment.constable:
+            assigned_officer_data = {
+                'id': current_assignment.constable.id,
+                'username': current_assignment.constable.username,
+                'full_name': current_assignment.constable.get_full_name() or current_assignment.constable.username,
+                'police_id': current_assignment.constable.police_id or current_assignment.police_id_snapshot or '',
+                'phone_number': current_assignment.constable.phone_number or '',
+                'police_station': current_assignment.constable.police_station or '',
+                'zone': current_assignment.constable.zone or '',
+                'started_at': current_assignment.started_at.isoformat() if current_assignment.started_at else None,
+            }
+
+        return Response({
+            'gpid': idol.gpid,
+            'idol_name': idol.name or idol.association_name or 'Idol',
+            'zone': idol.zone,
+            'police_station': idol.police_station,
+            'visarjan_date': idol.immersion_date.isoformat() if idol.immersion_date else None,
+            'is_already_assigned': current_assignment is not None,
+            'current_assignment': assigned_officer_data,
+            'total_eligible': len(officers_data),
+            'officers': officers_data,
         })
 
 
@@ -516,6 +613,23 @@ class AssignmentExportExcelView(APIView):
             elif hb_clean in ['26_plus', '26+', 'above_25', 'red']:
                 qs = qs.filter(idol_height__gte=26)
 
+        # Visarjan Date filter (AND composition)
+        visarjan_date = request.query_params.get('visarjan_date')
+        if visarjan_date and visarjan_date not in ['All Dates', 'all', '']:
+            vdate_clean = visarjan_date.lower().strip()
+            from datetime import date, timedelta, datetime
+            today = date.today()
+            if vdate_clean == 'today':
+                qs = qs.filter(immersion_date=today)
+            elif vdate_clean == 'tomorrow':
+                qs = qs.filter(immersion_date=today + timedelta(days=1))
+            else:
+                try:
+                    target_date = datetime.strptime(vdate_clean, '%Y-%m-%d').date()
+                    qs = qs.filter(immersion_date=target_date)
+                except ValueError:
+                    pass
+
         active_assigned_ids = set(
             Assignment.objects.filter(is_active=True, idol__in=qs).values_list('idol_id', flat=True)
         )
@@ -556,7 +670,7 @@ class AssignmentExportExcelView(APIView):
         ws.title = "Officer Assignments"
 
         # Department Title Header
-        ws.merge_cells("A1:N1")
+        ws.merge_cells("A1:O1")
         title_cell = ws["A1"]
         title_cell.value = "HYDERABAD CITY POLICE — GANESH VISARJAN MONITORING SYSTEM"
         title_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
@@ -565,9 +679,10 @@ class AssignmentExportExcelView(APIView):
         ws.row_dimensions[1].height = 28
 
         # Metadata Subheader
-        ws.merge_cells("A2:N2")
+        ws.merge_cells("A2:O2")
         sub_cell = ws["A2"]
-        sub_cell.value = f"OFFICER ASSIGNMENT & PROCESSION REGISTRY (15 FT+ IDOLS) | Exported on: {timezone.now().strftime('%d-%b-%Y %H:%M:%S IST')} | Records: {len(idol_ids)}"
+        filter_meta = f"Visarjan Date: {visarjan_date}" if visarjan_date and visarjan_date not in ['all', 'All Dates'] else "All Visarjan Dates"
+        sub_cell.value = f"OFFICER ASSIGNMENT & PROCESSION REGISTRY (15 FT+ IDOLS) | {filter_meta} | Exported on: {timezone.now().strftime('%d-%b-%Y %H:%M:%S IST')} | Records: {len(idol_ids)}"
         sub_cell.font = Font(name="Calibri", size=10, italic=True, color="94A3B8")
         sub_cell.fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
         sub_cell.alignment = Alignment(horizontal="center", vertical="center")
@@ -580,6 +695,7 @@ class AssignmentExportExcelView(APIView):
             "Pandal / Idol Name",
             "Height (FT)",
             "Height Category",
+            "Visarjan Date",
             "Zone",
             "Police Station",
             "Assignment Status",
@@ -627,6 +743,7 @@ class AssignmentExportExcelView(APIView):
             officer_ps = (assign.constable.police_station if assign and assign.constable else "") or "—"
             started_at = assign.started_at.strftime('%d-%b-%Y %H:%M') if assign and assign.started_at else "—"
             assignment_status_str = "ASSIGNED" if assign else "UNASSIGNED"
+            visarjan_date_str = idol.immersion_date.strftime('%d-%b-%Y') if idol.immersion_date else "—"
 
             row_data = [
                 idx,
@@ -634,6 +751,7 @@ class AssignmentExportExcelView(APIView):
                 idol.name or idol.association_name or "Ganesh Idol",
                 f"{h_val:.1f}",
                 category,
+                visarjan_date_str,
                 idol.zone,
                 idol.police_station,
                 assignment_status_str,
@@ -653,7 +771,7 @@ class AssignmentExportExcelView(APIView):
                 cell.font = Font(name="Calibri", size=10)
                 cell.fill = fill
                 cell.border = thin_border
-                if col_idx in [1, 2, 4, 5, 8, 10, 12]:
+                if col_idx in [1, 2, 4, 5, 6, 9, 11, 13]:
                     cell.alignment = Alignment(horizontal="center", vertical="center")
                 else:
                     cell.alignment = Alignment(horizontal="left", vertical="center")
@@ -667,15 +785,16 @@ class AssignmentExportExcelView(APIView):
             3: 30,  # Pandal Name
             4: 12,  # Height
             5: 16,  # Height Category
-            6: 18,  # Zone
-            7: 22,  # Police Station
-            8: 18,  # Assignment Status
-            9: 25,  # Assigned Officer
-            10: 16, # Police ID
-            11: 20, # Officer Station
-            12: 20, # Started At
-            13: 20, # Procession State
-            14: 35, # Address
+            6: 16,  # Visarjan Date
+            7: 18,  # Zone
+            8: 22,  # Police Station
+            9: 18,  # Assignment Status
+            10: 25, # Assigned Officer
+            11: 16, # Police ID
+            12: 20, # Officer Station
+            13: 20, # Started At
+            14: 20, # Procession State
+            15: 35, # Address
         }
         for col_idx, width in col_widths.items():
             ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = width

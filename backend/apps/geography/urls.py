@@ -1,6 +1,8 @@
 from django.urls import path
-from .views import PoliceStationListView
+from .views import PoliceStationListView, ZoneListView
 
 urlpatterns = [
     path('police-stations/', PoliceStationListView.as_view(), name='geography-police-stations'),
+    path('zones/', ZoneListView.as_view(), name='geography-zones'),
 ]
+

@@ -213,6 +213,7 @@ export async function fetchAssignableRegistry(params?: {
   police_station?: string;
   height_bucket?: string;
   assignment_status?: string;
+  visarjan_date?: string;
   search?: string;
   ordering?: string;
 }): Promise<AssignableRegistryResponse> {
@@ -223,6 +224,7 @@ export async function fetchAssignableRegistry(params?: {
   if (params?.police_station && params.police_station !== 'All Police Stations') query.append('police_station', params.police_station);
   if (params?.height_bucket && params.height_bucket !== 'All 15+ FT') query.append('height_bucket', params.height_bucket);
   if (params?.assignment_status && params.assignment_status !== 'all') query.append('assignment_status', params.assignment_status);
+  if (params?.visarjan_date && params.visarjan_date !== 'all' && params.visarjan_date !== 'All Dates') query.append('visarjan_date', params.visarjan_date);
   if (params?.search) query.append('search', params.search);
   if (params?.ordering) query.append('ordering', params.ordering);
 
@@ -245,6 +247,7 @@ export function getAssignmentExcelExportUrl(params?: {
   police_station?: string;
   height_bucket?: string;
   assignment_status?: string;
+  visarjan_date?: string;
   search?: string;
 }): string {
   const query = new URLSearchParams();
@@ -252,6 +255,7 @@ export function getAssignmentExcelExportUrl(params?: {
   if (params?.police_station && params.police_station !== 'All Police Stations') query.append('police_station', params.police_station);
   if (params?.height_bucket && params.height_bucket !== 'All 15+ FT') query.append('height_bucket', params.height_bucket);
   if (params?.assignment_status && params.assignment_status !== 'all') query.append('assignment_status', params.assignment_status);
+  if (params?.visarjan_date && params.visarjan_date !== 'all' && params.visarjan_date !== 'All Dates') query.append('visarjan_date', params.visarjan_date);
   if (params?.search) query.append('search', params.search);
 
   return `${API_BASE}/assignments/export/?${query.toString()}`;
@@ -373,12 +377,32 @@ export async function fetchAssignableOfficers(options?: {
   return await res.json();
 }
 
+export async function fetchEligibleOfficersForGpid(gpid: string): Promise<import('../types').EligibleOfficersResponse> {
+  const res = await apiFetch(`/assignments/registry/${encodeURIComponent(gpid)}/eligible-officers/`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new ApiError(err.error || `Failed to load eligible officers for ${gpid}`, res.status);
+  }
+  return await res.json();
+}
+
 // ---------------------------------------------------------------------------
 // Authoritative Geography
 // ---------------------------------------------------------------------------
 
-export async function fetchAuthoritativePoliceStations(): Promise<{ count: number; results: import('../types').PoliceStationMaster[] }> {
-  const res = await apiFetch('/geography/police-stations/');
+export async function fetchAuthoritativeZones(): Promise<string[]> {
+  const res = await apiFetch('/geography/zones/');
+  if (!res.ok) throw new ApiError('Failed to load authoritative zones', res.status);
+  const data = await res.json();
+  return data.zones || [];
+}
+
+export async function fetchAuthoritativePoliceStations(zone?: string): Promise<{ count: number; results: import('../types').PoliceStationMaster[] }> {
+  const query = new URLSearchParams();
+  if (zone && zone !== 'All Zones' && zone !== 'All' && zone.trim() !== '') {
+    query.append('zone', zone.trim());
+  }
+  const res = await apiFetch(`/geography/police-stations/?${query.toString()}`);
   if (!res.ok) throw new ApiError('Failed to load authoritative police stations', res.status);
   return await res.json();
 }

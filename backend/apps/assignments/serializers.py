@@ -98,6 +98,16 @@ class CreateAssignmentSerializer(serializers.Serializer):
                 'constable_id': f"Officer {constable.username} already has an active GPID assignment."
             })
 
+        # Station and Zone match between Idol and Constable
+        if not constable.police_station or constable.police_station.lower() != idol.police_station.lower():
+            raise serializers.ValidationError({
+                'constable_id': f"Officer's police station ('{constable.police_station or 'None'}') does not match idol's police station ('{idol.police_station}')."
+            })
+        if not constable.zone or constable.zone.lower() != idol.zone.lower():
+            raise serializers.ValidationError({
+                'constable_id': f"Officer's zone ('{constable.zone or 'None'}') does not match idol's zone ('{idol.zone}')."
+            })
+
         # Rule 30: Caller jurisdiction verification
         request = self.context.get('request')
         if request and request.user.is_authenticated:
@@ -137,6 +147,8 @@ class AssignableIdolRegistrySerializer(serializers.ModelSerializer):
     height_classification = serializers.SerializerMethodField()
     assignment = serializers.SerializerMethodField()
     tracking_state = serializers.SerializerMethodField()
+    visarjan_date = serializers.DateField(source='immersion_date', read_only=True)
+    immersion_date = serializers.DateField(read_only=True)
 
     class Meta:
         model = Idol
@@ -158,6 +170,8 @@ class AssignableIdolRegistrySerializer(serializers.ModelSerializer):
             'longitude',
             'geocoding_confidence',
             'resolved_address',
+            'immersion_date',
+            'visarjan_date',
             'procession_state',
             'tracking_state',
             'assignment',

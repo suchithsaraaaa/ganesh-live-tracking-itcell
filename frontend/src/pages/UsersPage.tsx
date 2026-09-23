@@ -20,6 +20,7 @@ import {
   toggleUserActive,
   deleteUser,
   fetchAuthoritativePoliceStations,
+  fetchAuthoritativeZones,
 } from '../api/client';
 import { User, UserRole, PoliceStationMaster } from '../types';
 import { useAuth, roleLabel } from '../context/AuthContext';
@@ -44,6 +45,7 @@ export const UsersPage: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
 
   const [policeStations, setPoliceStations] = useState<PoliceStationMaster[]>([]);
+  const [zones, setZones] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,12 +84,14 @@ export const UsersPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [userData, psData] = await Promise.all([
+      const [userData, psData, zonesData] = await Promise.all([
         fetchUsers(),
         fetchAuthoritativePoliceStations().catch(() => ({ count: 0, results: [] })),
+        fetchAuthoritativeZones().catch(() => []),
       ]);
       setUsers(userData.results || []);
       setPoliceStations(psData.results || []);
+      setZones(zonesData || []);
     } catch (err: any) {
       setError(err.message || 'Failed to load user directory.');
     } finally {
@@ -143,6 +147,22 @@ export const UsersPage: React.FC = () => {
     setFormError(null);
   };
 
+  const filteredStationsForForm = useMemo(() => {
+    if (!formData.zone) return [];
+    return policeStations.filter(
+      (s) => (s.zone || '').trim().toUpperCase() === formData.zone.trim().toUpperCase()
+    );
+  }, [policeStations, formData.zone]);
+
+  const handleZoneChange = (selectedZone: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      zone: selectedZone,
+      police_station: '',
+      division: '',
+    }));
+  };
+
   const handleStationChange = (stationName: string) => {
     const found = policeStations.find(
       (s) => (s.ps_name || s.name || '').toUpperCase() === stationName.toUpperCase()
@@ -172,6 +192,16 @@ export const UsersPage: React.FC = () => {
     setFormError(null);
 
     try {
+      if (formData.role === 'CONSTABLE') {
+        if (!formData.zone.trim()) throw new Error('Zone is required for Constable accounts.');
+        if (!formData.police_station.trim()) throw new Error('Police Station is required for Constable accounts.');
+      } else if (formData.role === 'SHO') {
+        if (!formData.zone.trim()) throw new Error('Zone is required for SHO accounts.');
+        if (!formData.police_station.trim()) throw new Error('Police Station is required for SHO accounts.');
+      } else if (formData.role === 'ACP') {
+        if (!formData.zone.trim()) throw new Error('Zone is required for ACP accounts.');
+      }
+
       if (modalMode === 'create') {
         if (!formData.username.trim()) throw new Error('Username is required.');
         if (!formData.password.trim()) throw new Error('Password is required for new accounts.');
@@ -590,47 +620,67 @@ export const UsersPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Jurisdiction */}
+              {/* Jurisdiction (Authoritative Cascading: Zone -> Police Station) */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-text-secondary font-medium mb-1">Police Station</label>
-                  {policeStations.length > 0 ? (
-                    <select
-                      value={formData.police_station}
-                      onChange={(e) => handleStationChange(e.target.value)}
-                      className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer"
-                    >
-                      <option value="">None / City Wide</option>
-                      {policeStations.map((s) => {
-                        const sName = s.ps_name || s.name || '';
-                        const sCode = s.ps_code || s.code || '';
-                        return (
-                          <option key={s.id} value={sName}>
-                            {sName} {sCode ? `(${sCode})` : ''}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={formData.police_station}
-                      onChange={(e) => setFormData({ ...formData, police_station: e.target.value })}
-                      placeholder="e.g. CHARMINAR"
-                      className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent"
-                    />
-                  )}
+                  <label className="block text-text-secondary font-medium mb-1">
+                    Zone {formData.role === 'CONSTABLE' || formData.role === 'SHO' || formData.role === 'ACP' ? (
+                      <span className="text-status-critical">*</span>
+                    ) : null}
+                  </label>
+                  <select
+                    value={formData.zone}
+                    onChange={(e) => handleZoneChange(e.target.value)}
+                    required={formData.role === 'CONSTABLE' || formData.role === 'SHO' || formData.role === 'ACP'}
+                    className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer"
+                  >
+                    <option value="">
+                      {formData.role === 'MAIN_OFFICER' ? 'None / City Wide' : 'Select Zone...'}
+                    </option>
+                    {zones.map((z) => (
+                      <option key={z} value={z}>
+                        {z}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
-                  <label className="block text-text-secondary font-medium mb-1">Zone</label>
-                  <input
-                    type="text"
-                    value={formData.zone}
-                    onChange={(e) => setFormData({ ...formData, zone: e.target.value })}
-                    placeholder="e.g. SOUTH ZONE"
-                    className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent"
-                  />
+                  <label className="block text-text-secondary font-medium mb-1">
+                    Police Station {formData.role === 'CONSTABLE' || formData.role === 'SHO' ? (
+                      <span className="text-status-critical">*</span>
+                    ) : null}
+                  </label>
+                  <select
+                    value={formData.police_station}
+                    onChange={(e) => handleStationChange(e.target.value)}
+                    disabled={!formData.zone && formData.role !== 'MAIN_OFFICER'}
+                    required={formData.role === 'CONSTABLE' || formData.role === 'SHO'}
+                    className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer disabled:opacity-50"
+                  >
+                    {!formData.zone ? (
+                      <option value="">
+                        {formData.role === 'MAIN_OFFICER' ? 'None / City Wide' : 'Select Zone First...'}
+                      </option>
+                    ) : (
+                      <>
+                        {formData.role !== 'CONSTABLE' && formData.role !== 'SHO' ? (
+                          <option value="">None / Zone Wide</option>
+                        ) : (
+                          <option value="">Select Police Station...</option>
+                        )}
+                        {filteredStationsForForm.map((s) => {
+                          const sName = s.ps_name || s.name || '';
+                          const sCode = s.ps_code || s.code || '';
+                          return (
+                            <option key={s.id} value={sName}>
+                              {sName} {sCode ? `(${sCode})` : ''}
+                            </option>
+                          );
+                        })}
+                      </>
+                    )}
+                  </select>
                 </div>
               </div>
 

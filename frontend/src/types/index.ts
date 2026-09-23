@@ -35,6 +35,7 @@ export interface AssignableOfficer {
   police_id: string;
   role: UserRole;
   police_station: string;
+  zone?: string;
   is_active: boolean;
   currently_assigned: boolean;
   assigned_gpid: string | null;
@@ -232,6 +233,7 @@ export interface Assignment {
 
 export type HeightBucketFilter = 'all_15_plus' | '15_20' | '21_25' | '26_plus';
 export type AssignmentStatusFilter = 'all' | 'unassigned' | 'assigned';
+export type VisarjanDateFilter = 'all' | 'today' | 'tomorrow' | string;
 
 export interface AssignableIdol {
   id: number;
@@ -251,6 +253,8 @@ export interface AssignableIdol {
   longitude?: number | null;
   geocoding_confidence?: string;
   resolved_address?: string;
+  visarjan_date?: string | null;
+  immersion_date?: string | null;
   procession_state: ProcessionState;
   tracking_state: ConnectionState;
   assignment: {
@@ -297,6 +301,8 @@ export interface AssignableIdolDetail {
   latitude?: number | null;
   longitude?: number | null;
   destination: string;
+  visarjan_date?: string | null;
+  immersion_date?: string | null;
   procession_state: ProcessionState;
   connection_state: ConnectionState;
   last_gps_timestamp?: string | null;
@@ -331,4 +337,38 @@ export interface AssignableIdolDetail {
     actor?: string | null;
     metadata?: Record<string, any>;
   }>;
+}
+
+export interface EligibleOfficer {
+  id: number;
+  username: string;
+  first_name: string;
+  last_name: string;
+  name: string;
+  police_id: string;
+  police_station: string;
+  zone: string;
+  phone_number?: string;
+  availability: string;
+}
+
+export interface EligibleOfficersResponse {
+  gpid: string;
+  idol_name: string;
+  zone: string;
+  police_station: string;
+  visarjan_date?: string | null;
+  is_already_assigned: boolean;
+  current_assignment?: {
+    id: number;
+    username: string;
+    full_name: string;
+    police_id: string;
+    phone_number: string;
+    police_station: string;
+    zone: string;
+    started_at: string | null;
+  } | null;
+  total_eligible: number;
+  officers: EligibleOfficer[];
 }

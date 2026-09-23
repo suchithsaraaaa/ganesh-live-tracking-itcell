@@ -658,3 +658,85 @@ class OfficerAssignmentRedesignTests(TestCase):
         self.assertEqual(res_assign.status_code, 400)
         self.assertIn('ineligible for assignment', str(res_assign.data))
 
+    # 25. Eligible officers endpoint matches police station and zone, excludes assigned
+    def test_25_eligible_officers_endpoint_matches_station_and_zone(self):
+        self.client.force_authenticate(user=self.main_officer)
+
+        # Create another constable in same station and zone
+        pc_cmr_2 = User.objects.create_user(
+            username='pc_cmr_2', password='password123', role=UserRole.CONSTABLE,
+            police_station='Charminar', zone='Charminar', is_active=True
+        )
+        # Create constable in DIFFERENT station
+        pc_other = User.objects.create_user(
+            username='pc_other', password='password123', role=UserRole.CONSTABLE,
+            police_station='Abids', zone='Central', is_active=True
+        )
+
+        res = self.client.get(f'/api/v1/assignments/registry/{self.idol_15ft.gpid}/eligible-officers/')
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('officers', res.data)
+        officer_ids = [o['id'] for o in res.data['officers']]
+        self.assertIn(self.pc_avail.id, officer_ids)
+        self.assertIn(pc_cmr_2.id, officer_ids)
+        self.assertNotIn(pc_other.id, officer_ids)
+
+        # Subthreshold idol gives 400
+        res_sub = self.client.get(f'/api/v1/assignments/registry/{self.idol_12ft.gpid}/eligible-officers/')
+        self.assertEqual(res_sub.status_code, 400)
+
+    # 26. Visarjan date filter supports today, tomorrow, and custom dates
+    def test_26_visarjan_date_filter_today_and_tomorrow(self):
+        from datetime import date, timedelta
+        self.client.force_authenticate(user=self.main_officer)
+
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+        yesterday = today - timedelta(days=1)
+
+        self.idol_15ft.immersion_date = today
+        self.idol_15ft.save()
+
+        self.idol_20ft.immersion_date = tomorrow
+        self.idol_20ft.save()
+
+        self.idol_21ft.immersion_date = yesterday
+        self.idol_21ft.save()
+
+        # Test 'today'
+        res_today = self.client.get('/api/v1/assignments/registry/?visarjan_date=today')
+        self.assertEqual(res_today.status_code, 200)
+        gpids_today = [item['gpid'] for item in res_today.data['results']]
+        self.assertIn(self.idol_15ft.gpid, gpids_today)
+        self.assertNotIn(self.idol_20ft.gpid, gpids_today)
+        self.assertNotIn(self.idol_21ft.gpid, gpids_today)
+
+        # Test 'tomorrow'
+        res_tomorrow = self.client.get('/api/v1/assignments/registry/?visarjan_date=tomorrow')
+        self.assertEqual(res_tomorrow.status_code, 200)
+        gpids_tomorrow = [item['gpid'] for item in res_tomorrow.data['results']]
+        self.assertIn(self.idol_20ft.gpid, gpids_tomorrow)
+        self.assertNotIn(self.idol_15ft.gpid, gpids_tomorrow)
+
+        # Test custom YYYY-MM-DD
+        target_str = today.strftime('%Y-%m-%d')
+        res_custom = self.client.get(f'/api/v1/assignments/registry/?visarjan_date={target_str}')
+        self.assertEqual(res_custom.status_code, 200)
+        gpids_custom = [item['gpid'] for item in res_custom.data['results']]
+        self.assertIn(self.idol_15ft.gpid, gpids_custom)
+        self.assertNotIn(self.idol_20ft.gpid, gpids_custom)
+
+    # 27. Excel export includes Visarjan Date column
+    def test_27_excel_export_includes_visarjan_date_column(self):
+        import io, openpyxl
+        self.client.force_authenticate(user=self.main_officer)
+        res = self.client.get('/api/v1/assignments/export/?visarjan_date=today')
+        self.assertEqual(res.status_code, 200)
+
+        wb = openpyxl.load_workbook(io.BytesIO(res.content))
+        ws = wb.active
+        headers = [ws.cell(row=4, column=col).value for col in range(1, 16)]
+        self.assertIn("Visarjan Date", headers)
+        self.assertEqual(headers[5], "Visarjan Date")
+
+

@@ -206,6 +206,13 @@ class AssignableOfficerDirectoryView(APIView):
             else:
                 qs = qs.none()
 
+        # Optional zone filter if authorized
+        requested_zone = request.query_params.get('zone')
+        if requested_zone:
+            if caller.role == UserRole.ACP and caller.zone and caller.zone.lower() != requested_zone.lower():
+                return Response({'error': 'Cannot view officers outside your zone jurisdiction.'}, status=status.HTTP_403_FORBIDDEN)
+            qs = qs.filter(zone__iexact=requested_zone)
+
         # Optional station filter if authorized
         requested_ps = request.query_params.get('police_station')
         if requested_ps:

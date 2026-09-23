@@ -40,3 +40,24 @@ class PoliceStationListView(APIView):
             'count': len(stations),
             'results': stations
         })
+
+
+class ZoneListView(APIView):
+    """
+    Read-only endpoint returning the authoritative distinct zones from PoliceStationBoundary.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        zones = list(
+            PoliceStationBoundary.objects.exclude(zone='')
+            .values_list('zone', flat=True)
+            .distinct()
+            .order_by('zone')
+        )
+        return Response({
+            'count': len(zones),
+            'results': zones,
+            'zones': zones
+        })
+
