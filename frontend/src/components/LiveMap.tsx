@@ -313,7 +313,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
           title: `GPID: ${m.gpid}`,
         });
         (marker as any)._visualSignature = `${m.is_origin_marker}|${isSelected}|${m.height_classification}|${m.connection_state}|${m.procession_state}|${m.idol_height}`;
-        marker.bindPopup(buildMarkerPopupHtml(m));
+        marker.bindPopup(buildMarkerPopupHtml(m), { autoPan: false });
         marker.on('click', () => {
           onSelectMarker(m);
         });
