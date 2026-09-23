@@ -22,7 +22,7 @@ import {
   fetchAuthoritativePoliceStations,
 } from '../api/client';
 import { User, UserRole, PoliceStationMaster } from '../types';
-import { roleLabel } from '../context/AuthContext';
+import { useAuth, roleLabel } from '../context/AuthContext';
 import { LoadingState, EmptyState, ErrorState } from '../components/shared/States';
 
 const CANONICAL_PERMISSIONS = [
@@ -40,7 +40,9 @@ const CANONICAL_PERMISSIONS = [
 ];
 
 export const UsersPage: React.FC = () => {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
+
   const [policeStations, setPoliceStations] = useState<PoliceStationMaster[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -428,35 +430,48 @@ export const UsersPage: React.FC = () => {
 
                     {/* Actions */}
                     <div className="w-36 flex items-center justify-end space-x-1">
-                      <button
-                        onClick={() => openEditModal(u)}
-                        title="Edit Officer & Permissions"
-                        className="p-1.5 rounded hover:bg-elevated-2 text-text-tertiary hover:text-text-primary transition-colors cursor-pointer"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => handleToggleActive(u)}
-                        title={u.is_active ? 'Disable Account' : 'Enable Account'}
-                        className={`p-1.5 rounded hover:bg-elevated-2 transition-colors cursor-pointer ${
-                          u.is_active
-                            ? 'text-status-critical hover:text-status-critical'
-                            : 'text-status-active hover:text-status-active'
-                        }`}
-                      >
-                        {u.is_active ? <XCircle className="w-3.5 h-3.5" /> : <CheckCircle className="w-3.5 h-3.5" />}
-                      </button>
-                      <button
-                        onClick={() => openDeleteModal(u)}
-                        title="Permanently Delete Account"
-                        className="p-1.5 rounded hover:bg-status-critical-soft text-text-tertiary hover:text-status-critical transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {(() => {
+                        const isSelf = currentUser?.id === u.id || currentUser?.username === u.username;
+                        return (
+                          <>
+                            <button
+                              onClick={() => openEditModal(u)}
+                              title="Edit Officer & Permissions"
+                              className="p-1.5 rounded hover:bg-elevated-2 text-text-tertiary hover:text-text-primary transition-colors cursor-pointer"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleToggleActive(u)}
+                              title={u.is_active ? 'Disable Account' : 'Enable Account'}
+                              className={`p-1.5 rounded hover:bg-elevated-2 transition-colors cursor-pointer ${
+                                u.is_active
+                                  ? 'text-status-critical hover:text-status-critical'
+                                  : 'text-status-active hover:text-status-active'
+                              }`}
+                            >
+                              {u.is_active ? <XCircle className="w-3.5 h-3.5" /> : <CheckCircle className="w-3.5 h-3.5" />}
+                            </button>
+                            <button
+                              onClick={() => !isSelf && openDeleteModal(u)}
+                              disabled={isSelf}
+                              title={isSelf ? "You cannot delete your own account." : "Permanently Delete Account"}
+                              className={`p-1.5 rounded transition-colors ${
+                                isSelf
+                                  ? 'opacity-30 cursor-not-allowed text-text-tertiary'
+                                  : 'hover:bg-status-critical-soft text-status-critical hover:opacity-80 cursor-pointer'
+                              }`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 );
               })}
+
             </div>
           </div>
         )}
@@ -714,23 +729,38 @@ export const UsersPage: React.FC = () => {
             </div>
 
             <div className="p-5 space-y-4 text-xs">
-              <div className="p-3 bg-status-critical-soft border border-status-critical/25 rounded-md space-y-1">
-                <p className="font-semibold text-text-primary">
-                  You are about to permanently delete the account for:
-                </p>
-                <p className="mono text-text-secondary">
-                  {`${deleteTarget.first_name || ''} ${deleteTarget.last_name || ''}`.trim() || deleteTarget.username}
-                  {' '}(<span className="text-accent">@{deleteTarget.username}</span>)
-                  {deleteTarget.police_id ? ` — ${deleteTarget.police_id}` : ''}
-                </p>
+              <div className="p-3 bg-status-critical-soft border border-status-critical/25 rounded-md space-y-2">
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div>
+                    <span className="text-text-tertiary block text-[10px] uppercase font-medium">Officer Name</span>
+                    <span className="font-semibold text-text-primary">
+                      {`${deleteTarget.first_name || ''} ${deleteTarget.last_name || ''}`.trim() || deleteTarget.username}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-text-tertiary block text-[10px] uppercase font-medium">Username</span>
+                    <span className="font-semibold text-accent mono">@{deleteTarget.username}</span>
+                  </div>
+                  <div>
+                    <span className="text-text-tertiary block text-[10px] uppercase font-medium">Police ID</span>
+                    <span className="mono text-text-secondary">{deleteTarget.police_id || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-text-tertiary block text-[10px] uppercase font-medium">Role</span>
+                    <span className="font-medium text-text-secondary">{roleLabel(deleteTarget.role)}</span>
+                  </div>
+                  <div className="col-span-2">
+                    <span className="text-text-tertiary block text-[10px] uppercase font-medium">Station / Zone</span>
+                    <span className="text-text-secondary">
+                      {deleteTarget.police_station || 'All Stations'} / {deleteTarget.zone || 'Hyderabad District'}
+                    </span>
+                  </div>
+                </div>
               </div>
 
-              <ul className="space-y-1 text-text-secondary text-[11px] pl-1">
-                <li className="flex items-start gap-1.5"><span className="text-status-critical mt-0.5">▸</span><span>This action is <strong className="text-text-primary">permanent and irreversible</strong>.</span></li>
-                <li className="flex items-start gap-1.5"><span className="text-status-active mt-0.5">▸</span><span>All historical assignment, GPS tracking, and procession records will be <strong className="text-text-primary">preserved</strong> with officer identity snapshots.</span></li>
-                <li className="flex items-start gap-1.5"><span className="text-status-active mt-0.5">▸</span><span>Audit trail events attributed to this officer will remain intact.</span></li>
-                <li className="flex items-start gap-1.5"><span className="text-status-critical mt-0.5">▸</span><span>Active GPID assignments must be <strong className="text-text-primary">reassigned or ended</strong> before deletion is permitted.</span></li>
-              </ul>
+              <p className="text-text-secondary text-[11px] leading-relaxed">
+                This permanently deletes the user account. Historical assignments, tracking sessions, reports and audit records are preserved where applicable.
+              </p>
 
               {deleteError && (
                 <div className="p-3 bg-status-critical-soft border border-status-critical/30 rounded-md flex items-start space-x-2 text-status-critical">
@@ -755,10 +785,11 @@ export const UsersPage: React.FC = () => {
                   className="px-4 py-2 bg-status-critical hover:opacity-90 disabled:opacity-50 text-white font-semibold rounded-md transition-opacity cursor-pointer flex items-center space-x-1.5"
                 >
                   {deleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{deleting ? 'Deleting…' : 'Permanently Delete'}</span>
+                  <span>{deleting ? 'Deleting…' : 'Delete Account'}</span>
                 </button>
               </div>
             </div>
+
           </div>
         </div>
       )}

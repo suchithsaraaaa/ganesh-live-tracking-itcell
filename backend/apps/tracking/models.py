@@ -44,7 +44,11 @@ class TrackingSession(models.Model):
         ]
 
     def __str__(self):
-        return f"Session #{self.id} for {self.assignment.idol.gpid} by {self.assignment.constable.username} [{self.status}]"
+        c_name = self.assignment.constable.username if (self.assignment and self.assignment.constable) else (
+            (self.assignment.officer_name_snapshot or 'Unassigned') if self.assignment else 'Unassigned'
+        )
+        gpid = self.assignment.idol.gpid if (self.assignment and self.assignment.idol) else 'No Idol'
+        return f"Session #{self.id} for {gpid} by {c_name} [{self.status}]"
 
     @property
     def idol(self):
@@ -118,8 +122,10 @@ class IdolEventType(models.TextChoices):
     ASSIGNMENT_HANDOVER = 'ASSIGNMENT_HANDOVER', 'Assignment Handover'
     ZONE_ENTERED = 'ZONE_ENTERED', 'Zone Entered'
     HOLDING_POINT_ENTERED = 'HOLDING_POINT_ENTERED', 'Holding Point Entered'
+    HOLDING_POINT_EXITED = 'HOLDING_POINT_EXITED', 'Holding Point Exited'
     VISARJAN_REACHED = 'VISARJAN_REACHED', 'Visarjan Site Reached'
     IMMERSION_COMPLETED = 'IMMERSION_COMPLETED', 'Immersion Completed'
+    REPORT_GENERATED = 'REPORT_GENERATED', 'Report Generated'
 
 
 class IdolEvent(models.Model):

@@ -144,9 +144,33 @@ export async function fetchTimestampLookup(gpid: string, isoTimestamp: string): 
   return await res.json();
 }
 
-export async function fetchJourney(gpid: string): Promise<JourneyData> {
-  const res = await apiFetch(`/tracking/idols/${gpid}/journey/`);
+export async function fetchJourney(gpid: string, sessionId?: number): Promise<JourneyData> {
+  const query = sessionId ? `?session_id=${sessionId}` : '';
+  const res = await apiFetch(`/tracking/idols/${gpid}/journey/${query}`);
   if (!res.ok) throw new ApiError('Failed to fetch journey trail', res.status);
+  return await res.json();
+}
+
+export async function fetchSessionJourney(sessionId: number): Promise<JourneyData> {
+  const res = await apiFetch(`/tracking/sessions/${sessionId}/journey/`);
+  if (!res.ok) throw new ApiError('Failed to fetch session journey trail', res.status);
+  return await res.json();
+}
+
+export async function fetchActiveTrackingMarkers(filters?: {
+  zone?: string;
+  police_station?: string;
+  height_bucket?: string;
+  search?: string;
+}): Promise<ActiveMarker[]> {
+  const query = new URLSearchParams();
+  if (filters?.zone && filters.zone !== 'All Zones') query.append('zone', filters.zone);
+  if (filters?.police_station) query.append('police_station', filters.police_station);
+  if (filters?.height_bucket && filters.height_bucket !== 'ALL') query.append('height_bucket', filters.height_bucket);
+  if (filters?.search) query.append('search', filters.search);
+
+  const res = await apiFetch(`/tracking/active/?${query.toString()}`);
+  if (!res.ok) throw new ApiError('Failed to fetch active tracking markers', res.status);
   return await res.json();
 }
 
@@ -154,9 +178,11 @@ export async function fetchJourney(gpid: string): Promise<JourneyData> {
 // Reports
 // ---------------------------------------------------------------------------
 
-export function getReportDownloadUrl(gpid: string): string {
-  return `${API_BASE}/reports/idols/${gpid}/`;
+export function getReportDownloadUrl(gpid: string, sessionId?: number): string {
+  const query = sessionId ? `?session_id=${sessionId}` : '';
+  return `${API_BASE}/reports/idols/${gpid}/${query}`;
 }
+
 
 // ---------------------------------------------------------------------------
 // Assignments

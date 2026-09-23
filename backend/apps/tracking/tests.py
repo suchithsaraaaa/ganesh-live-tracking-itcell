@@ -335,3 +335,169 @@ class AndroidAPKIntegrationTests(TestCase):
         # Assignment created event exists
         event_types = [e['event_type'] for e in res.data['events']]
         self.assertIn('ASSIGNMENT_CREATED', event_types)
+
+    def test_active_tracking_list_empty_when_no_active_sessions(self):
+        """Mandatory Test A: When no sessions are active, GET /api/v1/tracking/active/ returns []."""
+        self.client.force_authenticate(user=self.pc)
+        res = self.client.get('/api/v1/tracking/active/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data, [])
+
+    def test_active_session_without_gps_is_omitted(self):
+        """Mandatory Test B: Active session without GPS telemetry is omitted from live markers."""
+        self.client.force_authenticate(user=self.pc)
+        TrackingSession.objects.create(
+            assignment=self.assignment,
+            status=TrackingSessionStatus.ACTIVE
+        )
+        res = self.client.get('/api/v1/tracking/active/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data, [])
+
+    def test_start_tracking_persists_initial_point_and_creates_live_marker(self):
+        """Mandatory Test C: Start with valid GPS creates initial LocationPoint and one live marker."""
+        self.client.force_authenticate(user=self.pc)
+        # Update idol to EXACT confidence at Charminar coords
+        self.idol.latitude = 17.3616
+        self.idol.longitude = 78.4747
+        self.idol.geocoding_confidence = GeocodingConfidence.EXACT
+        self.idol.save(update_fields=['latitude', 'longitude', 'geocoding_confidence'])
+
+        res_start = self.client.post('/api/v1/tracking/start/', {
+            'assignment_id': self.assignment.id,
+            'latitude': 17.3616,
+            'longitude': 78.4747,
+            'accuracy': 5.0,
+            'device_info': 'Test Device'
+        })
+        self.assertEqual(res_start.status_code, 201)
+        session_id = res_start.data['id']
+
+        # Verify initial point created
+        self.assertTrue(LocationPoint.objects.filter(session_id=session_id).exists())
+
+        # Verify operational event created
+        from apps.tracking.models import IdolEvent, IdolEventType
+        event = IdolEvent.objects.filter(tracking_session_id=session_id, event_type=IdolEventType.TRACKING_STARTED).first()
+        self.assertIsNotNone(event)
+        self.assertEqual(event.latitude, 17.3616)
+        self.assertEqual(event.longitude, 78.4747)
+
+        # Verify Live Map active endpoint returns this 1 marker with tracking_session_id
+        res_active = self.client.get('/api/v1/tracking/active/')
+        self.assertEqual(res_active.status_code, 200)
+        self.assertEqual(len(res_active.data), 1)
+        m = res_active.data[0]
+        self.assertEqual(m['gpid'], self.idol.gpid)
+        self.assertEqual(m['tracking_session_id'], session_id)
+        self.assertEqual(m['latitude'], 17.3616)
+        self.assertEqual(m['longitude'], 78.4747)
+
+    def test_new_telemetry_updates_live_marker_and_duplicate_initial_is_ignored(self):
+        """Mandatory Test D & 3: New telemetry moves marker; duplicate initial GPS is skipped."""
+        self.client.force_authenticate(user=self.pc)
+        session = TrackingSession.objects.create(
+            assignment=self.assignment,
+            status=TrackingSessionStatus.ACTIVE,
+            started_at=timezone.now()
+        )
+        t0 = session.started_at
+        # Start initial point
+        LocationPoint.objects.create(session=session, latitude=17.3616, longitude=78.4747, recorded_at=t0)
+
+        # Mobile resends initial GPS within 5 seconds -> duplicate skipped
+        res_dup = self.client.post('/api/v1/tracking/location/', {
+            'session_id': session.id,
+            'latitude': 17.3616,
+            'longitude': 78.4747,
+            'accuracy': 6.0,
+            'recorded_at': (t0 + timedelta(seconds=2)).isoformat()
+        })
+        self.assertEqual(res_dup.status_code, 201)
+        self.assertEqual(res_dup.data['status'], 'duplicate_ignored')
+        self.assertEqual(LocationPoint.objects.filter(session=session).count(), 1)
+
+        # New movement telemetry arrives
+        t1 = t0 + timedelta(seconds=30)
+        res_move = self.client.post('/api/v1/tracking/location/', {
+            'session_id': session.id,
+            'latitude': 17.3625,
+            'longitude': 78.4755,
+            'speed': 2.5,
+            'heading': 45.0,
+            'recorded_at': t1.isoformat()
+        })
+        self.assertEqual(res_move.status_code, 201)
+        self.assertEqual(res_move.data['status'], 'recorded')
+
+        # Live map returns updated position
+        res_active = self.client.get('/api/v1/tracking/active/')
+        self.assertEqual(len(res_active.data), 1)
+        self.assertAlmostEqual(res_active.data[0]['latitude'], 17.3625)
+        self.assertAlmostEqual(res_active.data[0]['longitude'], 78.4755)
+
+    def test_stop_session_removes_marker_and_creates_event(self):
+        """Mandatory Test F: Stopped session immediately disappears from active markers."""
+        self.client.force_authenticate(user=self.pc)
+        session = TrackingSession.objects.create(
+            assignment=self.assignment,
+            status=TrackingSessionStatus.ACTIVE,
+            started_at=timezone.now()
+        )
+        LocationPoint.objects.create(session=session, latitude=17.3616, longitude=78.4747, recorded_at=session.started_at)
+
+        # Verify visible before stop
+        res1 = self.client.get('/api/v1/tracking/active/')
+        self.assertEqual(len(res1.data), 1)
+
+        # Stop session
+        res_stop = self.client.post('/api/v1/tracking/stop/', {'session_id': session.id})
+        self.assertEqual(res_stop.status_code, 200)
+
+        # Verify omitted immediately after stop
+        res2 = self.client.get('/api/v1/tracking/active/')
+        self.assertEqual(res2.data, [])
+
+        # Verify TRACKING_STOPPED event created
+        from apps.tracking.models import IdolEvent, IdolEventType
+        event = IdolEvent.objects.filter(tracking_session=session, event_type=IdolEventType.TRACKING_STOPPED).first()
+        self.assertIsNotNone(event)
+
+    def test_session_scoped_journey_isolation(self):
+        """Mandatory Test G & 1: Multiple tracking sessions for the same GPID NEVER merge telemetry."""
+        self.client.force_authenticate(user=self.pc)
+        t_base = timezone.now() - timedelta(hours=3)
+
+        # Session 1: Day 1 (2 points)
+        s1 = TrackingSession.objects.create(
+            assignment=self.assignment,
+            status=TrackingSessionStatus.STOPPED,
+            started_at=t_base,
+            ended_at=t_base + timedelta(hours=1)
+        )
+        LocationPoint.objects.create(session=s1, latitude=17.3610, longitude=78.4710, recorded_at=t_base)
+        LocationPoint.objects.create(session=s1, latitude=17.3620, longitude=78.4720, recorded_at=t_base + timedelta(minutes=15))
+
+        # Session 2: Day 2 (3 points)
+        t2_base = timezone.now() - timedelta(minutes=30)
+        s2 = TrackingSession.objects.create(
+            assignment=self.assignment,
+            status=TrackingSessionStatus.ACTIVE,
+            started_at=t2_base
+        )
+        LocationPoint.objects.create(session=s2, latitude=17.3650, longitude=78.4750, recorded_at=t2_base)
+        LocationPoint.objects.create(session=s2, latitude=17.3660, longitude=78.4760, recorded_at=t2_base + timedelta(minutes=5))
+        LocationPoint.objects.create(session=s2, latitude=17.3670, longitude=78.4770, recorded_at=t2_base + timedelta(minutes=10))
+
+        # Direct session endpoint: GET /api/v1/tracking/sessions/<id>/journey/
+        res_s2 = self.client.get(f'/api/v1/tracking/sessions/{s2.id}/journey/')
+        self.assertEqual(res_s2.status_code, 200)
+        self.assertEqual(res_s2.data['total_points'], 3)
+        self.assertEqual(res_s2.data['tracking_session_id'], s2.id)
+
+        # GPID journey endpoint with session_id scoping: GET /api/v1/tracking/idols/<gpid>/journey/?session_id=<s1.id>
+        res_s1 = self.client.get(f'/api/v1/tracking/idols/{self.idol.gpid}/journey/?session_id={s1.id}')
+        self.assertEqual(res_s1.status_code, 200)
+        self.assertEqual(res_s1.data['total_points'], 2)
+        self.assertEqual(res_s1.data['tracking_session_id'], s1.id)
+

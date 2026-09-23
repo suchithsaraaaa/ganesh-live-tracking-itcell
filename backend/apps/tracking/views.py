@@ -3,12 +3,13 @@ from datetime import datetime
 from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from common.permissions import filter_by_jurisdiction
 
 import math
 from .models import TrackingSession, LocationPoint, TrackingSessionStatus, IdolEvent, IdolEventType
@@ -140,17 +141,34 @@ class StartTrackingView(APIView):
                 )
 
         with transaction.atomic():
+            now = timezone.now()
             # Stop any previously active tracking session for this assignment
             TrackingSession.objects.filter(
                 assignment=assignment,
                 status=TrackingSessionStatus.ACTIVE
-            ).update(status=TrackingSessionStatus.STOPPED, ended_at=timezone.now())
+            ).update(status=TrackingSessionStatus.STOPPED, ended_at=now)
 
             session = TrackingSession.objects.create(
                 assignment=assignment,
                 device_info=device_info,
-                status=TrackingSessionStatus.ACTIVE
+                status=TrackingSessionStatus.ACTIVE,
+                started_at=now
             )
+
+            # Persist initial start GPS as first LocationPoint immediately
+            # Guarantees live marker appears instantly on Live Map
+            start_lat = float(officer_lat) if officer_lat is not None else None
+            start_lon = float(officer_lon) if officer_lon is not None else None
+            if start_lat is not None and start_lon is not None:
+                LocationPoint.objects.create(
+                    session=session,
+                    latitude=start_lat,
+                    longitude=start_lon,
+                    accuracy=serializer.validated_data.get('accuracy'),
+                    speed=0.0,
+                    heading=0.0,
+                    recorded_at=now
+                )
 
             # Update Idol procession state if not already started
             idol = assignment.idol
@@ -158,16 +176,23 @@ class StartTrackingView(APIView):
                 idol.procession_state = ProcessionState.TRACKING
                 idol.save(update_fields=['procession_state', 'updated_at'])
 
-            # Log operational event
+            # Log durable operational event
+            constable_name = assignment.constable.username if assignment.constable else (assignment.officer_name_snapshot or 'Assigned Officer')
             IdolEvent.objects.create(
                 idol=idol,
                 gpid=idol.gpid,
                 event_type=IdolEventType.TRACKING_STARTED,
-                timestamp=timezone.now(),
+                timestamp=now,
+                latitude=start_lat,
+                longitude=start_lon,
                 zone=idol.zone,
                 actor=request.user,
                 tracking_session=session,
-                metadata={'device_info': device_info, 'constable': assignment.constable.username}
+                metadata={
+                    'device_info': device_info,
+                    'constable': constable_name,
+                    'source': 'Ground Staff Device'
+                }
             )
 
         return Response(TrackingSessionSerializer(session).data, status=status.HTTP_201_CREATED)
@@ -185,6 +210,21 @@ class IngestLocationView(APIView):
 
         data = serializer.validated_data
         session = get_object_or_404(TrackingSession, id=data['session_id'], status=TrackingSessionStatus.ACTIVE)
+
+        # Check for duplicate of initial start GPS point
+        initial_point = LocationPoint.objects.filter(session=session).order_by('recorded_at').first()
+        if initial_point and session.started_at and abs((data['recorded_at'] - session.started_at).total_seconds()) <= 15:
+            if abs(data['latitude'] - initial_point.latitude) < 0.0001 and abs(data['longitude'] - initial_point.longitude) < 0.0001:
+                if data.get('accuracy') is not None and not initial_point.accuracy:
+                    initial_point.accuracy = data.get('accuracy')
+                    initial_point.save(update_fields=['accuracy'])
+                return Response({
+                    'status': 'duplicate_ignored',
+                    'point_id': initial_point.id,
+                    'gpid': session.assignment.idol.gpid,
+                    'connection_state': 'LIVE',
+                    'procession_state': session.assignment.idol.procession_state
+                }, status=status.HTTP_201_CREATED)
 
         # Ingest or update if duplicate timestamp
         point, created = LocationPoint.objects.get_or_create(
@@ -237,6 +277,7 @@ class BatchIngestLocationView(APIView):
         existing_timestamps = set(
             LocationPoint.objects.filter(session=session).values_list('recorded_at', flat=True)
         )
+        initial_point = LocationPoint.objects.filter(session=session).order_by('recorded_at').first()
 
         points_to_create = []
         for p in points_data:
@@ -256,6 +297,11 @@ class BatchIngestLocationView(APIView):
             if lat == 0 and lon == 0:
                 continue
 
+            # Skip if this point duplicates the initial start point created at session start
+            if initial_point and session.started_at and abs((rec_at - session.started_at).total_seconds()) <= 15:
+                if abs(lat - initial_point.latitude) < 0.0001 and abs(lon - initial_point.longitude) < 0.0001:
+                    continue
+
             points_to_create.append(LocationPoint(
                 session=session,
                 latitude=lat,
@@ -266,6 +312,7 @@ class BatchIngestLocationView(APIView):
                 recorded_at=rec_at
             ))
             existing_timestamps.add(rec_at)
+
 
         if points_to_create:
             with transaction.atomic():
@@ -294,54 +341,73 @@ class StopTrackingView(APIView):
         if session_id:
             session = get_object_or_404(TrackingSession, id=session_id)
         elif gpid:
-            session = get_object_or_404(
-                TrackingSession,
+            session = TrackingSession.objects.filter(
                 assignment__idol__gpid__iexact=gpid,
                 status=TrackingSessionStatus.ACTIVE
-            )
+            ).order_by('-started_at').first()
+            if not session:
+                return Response(
+                    {'error': f'No active tracking session found for GPID {gpid}.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
         else:
             return Response({'error': 'session_id or gpid required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        session.stop_session()
-
-        idol = session.assignment.idol
-        if final_state in [ProcessionState.AT_VISARJAN, ProcessionState.IMMERSION_COMPLETED]:
-            idol.procession_state = final_state
-            idol.save(update_fields=['procession_state', 'updated_at'])
-
-        # Log operational event
         now = timezone.now()
-        IdolEvent.objects.create(
-            idol=idol,
-            gpid=idol.gpid,
-            event_type=IdolEventType.TRACKING_STOPPED,
-            timestamp=now,
-            zone=idol.zone,
-            actor=request.user,
-            tracking_session=session,
-            metadata={'final_state': final_state or idol.procession_state}
-        )
+        with transaction.atomic():
+            session.stop_session()
 
-        if final_state == ProcessionState.AT_VISARJAN:
+            idol = session.assignment.idol
+            if final_state in [ProcessionState.AT_VISARJAN, ProcessionState.IMMERSION_COMPLETED]:
+                idol.procession_state = final_state
+                idol.save(update_fields=['procession_state', 'updated_at'])
+
+            latest_pt = session.location_points.order_by('-recorded_at').first()
+            stop_lat = latest_pt.latitude if latest_pt else None
+            stop_lon = latest_pt.longitude if latest_pt else None
+
+            # Log operational event
             IdolEvent.objects.create(
                 idol=idol,
                 gpid=idol.gpid,
-                event_type=IdolEventType.VISARJAN_REACHED,
+                event_type=IdolEventType.TRACKING_STOPPED,
                 timestamp=now,
+                latitude=stop_lat,
+                longitude=stop_lon,
                 zone=idol.zone,
                 actor=request.user,
-                tracking_session=session
+                tracking_session=session,
+                metadata={
+                    'final_state': final_state or idol.procession_state,
+                    'stopped_by': request.user.username,
+                    'source': 'Ground Staff Device'
+                }
             )
-        elif final_state == ProcessionState.IMMERSION_COMPLETED:
-            IdolEvent.objects.create(
-                idol=idol,
-                gpid=idol.gpid,
-                event_type=IdolEventType.IMMERSION_COMPLETED,
-                timestamp=now,
-                zone=idol.zone,
-                actor=request.user,
-                tracking_session=session
-            )
+
+            if final_state == ProcessionState.AT_VISARJAN:
+                IdolEvent.objects.create(
+                    idol=idol,
+                    gpid=idol.gpid,
+                    event_type=IdolEventType.VISARJAN_REACHED,
+                    timestamp=now,
+                    latitude=stop_lat,
+                    longitude=stop_lon,
+                    zone=idol.zone,
+                    actor=request.user,
+                    tracking_session=session
+                )
+            elif final_state == ProcessionState.IMMERSION_COMPLETED:
+                IdolEvent.objects.create(
+                    idol=idol,
+                    gpid=idol.gpid,
+                    event_type=IdolEventType.IMMERSION_COMPLETED,
+                    timestamp=now,
+                    latitude=stop_lat,
+                    longitude=stop_lon,
+                    zone=idol.zone,
+                    actor=request.user,
+                    tracking_session=session
+                )
 
         return Response({
             'status': 'stopped',
@@ -440,22 +506,123 @@ class TimestampLookupView(APIView):
         })
 
 
+def build_session_journey_response(session, idol):
+    """
+    Builds a complete session-scoped journey payload.
+    Guarantees that telemetry from other sessions for the same GPID is never mixed.
+    """
+    points = LocationPoint.objects.filter(session=session).order_by('recorded_at')
+
+    if not points.exists():
+        return Response({
+            'gpid': idol.gpid,
+            'tracking_session_id': session.id,
+            'idol_name': idol.name,
+            'police_station': idol.police_station,
+            'zone': idol.zone,
+            'procession_state': idol.procession_state,
+            'connection_state': 'OFFLINE',
+            'total_points': 0,
+            'points': [],
+            'summary': {
+                'start_time': None,
+                'end_time': None,
+                'max_speed_kmh': 0,
+                'distance_travelled_km': 0.0,
+            },
+            'events': []
+        })
+
+    points_list = []
+    max_speed = 0.0
+    for p in points:
+        spd = p.speed or 0.0
+        if spd > max_speed:
+            max_speed = spd
+        points_list.append({
+            'latitude': p.latitude,
+            'longitude': p.longitude,
+            'speed': p.speed,
+            'heading': p.heading,
+            'accuracy': p.accuracy,
+            'recorded_at': p.recorded_at.isoformat() if p.recorded_at else None,
+        })
+
+    start_time = points_list[0]['recorded_at']
+    end_time = points_list[-1]['recorded_at']
+
+    # Last point connection freshness
+    last_pt = points.last()
+    connection_state = get_connection_state(last_pt.recorded_at if last_pt else None)
+
+    # Calculate actual sequential travelled distance (Haversine)
+    distance_km = calculate_sequential_distance_km(points)
+
+    # Retrieve operational event timeline scoped to this tracking session
+    raw_events = IdolEvent.objects.filter(
+        Q(tracking_session=session) | Q(idol=idol, tracking_session__isnull=True)
+    ).order_by('timestamp').select_related('actor')
+
+    events_list = [{
+        'id': ev.id,
+        'event_type': ev.event_type,
+        'label': ev.get_event_type_display(),
+        'timestamp': ev.timestamp.isoformat() if ev.timestamp else None,
+        'latitude': ev.latitude,
+        'longitude': ev.longitude,
+        'zone': ev.zone,
+        'actor': ev.actor.get_full_name() or ev.actor.username if ev.actor else None,
+        'metadata': ev.metadata
+    } for ev in raw_events]
+
+    return Response({
+        'gpid': idol.gpid,
+        'tracking_session_id': session.id,
+        'idol_name': idol.name,
+        'police_station': idol.police_station,
+        'zone': idol.zone,
+        'procession_state': idol.procession_state,
+        'connection_state': connection_state,
+        'total_points': len(points_list),
+        'summary': {
+            'start_time': start_time,
+            'end_time': end_time,
+            'max_speed_kmh': round(max_speed * 3.6, 2),  # m/s to km/h
+            'distance_travelled_km': distance_km,
+        },
+        'points': points_list,
+        'events': events_list
+    })
+
+
 class JourneyView(APIView):
     """
     Returns complete chronological GPS breadcrumbs and procession stats for a GPID.
+    Explicitly supports session_id scoping so multiple sessions for one GPID are NEVER merged.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request, gpid):
         idol = get_object_or_404(Idol, gpid__iexact=gpid)
+        session_id = request.query_params.get('session_id')
 
-        points = LocationPoint.objects.filter(
-            session__assignment__idol=idol
-        ).order_by('recorded_at')
+        if session_id and str(session_id).isdigit():
+            session = get_object_or_404(TrackingSession, id=int(session_id), assignment__idol=idol)
+        else:
+            # Active session priority, or latest session
+            session = TrackingSession.objects.filter(
+                assignment__idol=idol,
+                status=TrackingSessionStatus.ACTIVE
+            ).order_by('-started_at').first()
+            if not session:
+                session = TrackingSession.objects.filter(
+                    assignment__idol=idol
+                ).order_by('-started_at').first()
 
-        if not points.exists():
+        if not session:
             return Response({
                 'gpid': idol.gpid,
+                'tracking_session_id': None,
                 'idol_name': idol.name,
                 'total_points': 0,
                 'points': [],
@@ -463,65 +630,158 @@ class JourneyView(APIView):
                     'start_time': None,
                     'end_time': None,
                     'max_speed_kmh': 0,
-                }
+                    'distance_travelled_km': 0,
+                },
+                'events': []
             })
 
-        points_list = []
-        max_speed = 0.0
-        for p in points:
-            spd = p.speed or 0.0
-            if spd > max_speed:
-                max_speed = spd
-            points_list.append({
-                'latitude': p.latitude,
-                'longitude': p.longitude,
-                'speed': p.speed,
-                'heading': p.heading,
-                'accuracy': p.accuracy,
-                'recorded_at': p.recorded_at,
+        return build_session_journey_response(session, idol)
+
+
+class SessionJourneyView(APIView):
+    """
+    Direct session-scoped journey endpoint: GET /api/v1/tracking/sessions/<int:session_id>/journey/
+    Guarantees that telemetry from previous sessions is never mixed.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, session_id):
+        session = get_object_or_404(TrackingSession, id=session_id)
+        return build_session_journey_response(session, session.assignment.idol)
+
+
+class ActiveTrackingListView(APIView):
+    """
+    Returns ONLY currently active tracking sessions with their valid latest GPS positions.
+    If zero active sessions exist: returns [].
+    If session has no GPS telemetry: omitted.
+    If session is stopped: omitted.
+    Strictly zero registry / centroid fallback points.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = TrackingSession.objects.filter(
+            status=TrackingSessionStatus.ACTIVE
+        ).select_related(
+            'assignment__idol',
+            'assignment__constable'
+        )
+
+        # Enforce server-side jurisdiction
+        qs = filter_by_jurisdiction(
+            qs,
+            request.user,
+            ps_field='assignment__idol__police_station',
+            zone_field='assignment__idol__zone',
+            division_field='assignment__idol__division'
+        )
+
+        # Unified active procession filters
+        zone = request.query_params.get('zone')
+        if zone and zone != 'All Zones':
+            qs = qs.filter(assignment__idol__zone__iexact=zone)
+
+        ps = request.query_params.get('police_station')
+        if ps:
+            qs = qs.filter(assignment__idol__police_station__iexact=ps)
+
+        height_bucket = request.query_params.get('height_bucket')
+        if height_bucket and height_bucket != 'ALL':
+            hb = height_bucket.lower().strip()
+            if hb in ['15_20', '15-20', 'green']:
+                qs = qs.filter(assignment__idol__idol_height__gte=15, assignment__idol__idol_height__lt=21)
+            elif hb in ['21_25', '21-25', 'yellow']:
+                qs = qs.filter(assignment__idol__idol_height__gte=21, assignment__idol__idol_height__lt=26)
+            elif hb in ['above_25', '26_plus', '26+', 'red']:
+                qs = qs.filter(assignment__idol__idol_height__gte=26)
+
+        search = request.query_params.get('search')
+        if search:
+            s = search.strip()
+            qs = qs.filter(
+                Q(assignment__idol__gpid__icontains=s) |
+                Q(assignment__idol__name__icontains=s) |
+                Q(assignment__idol__association_name__icontains=s)
+            )
+
+        active_sessions = list(qs.order_by('-started_at'))
+        if not active_sessions:
+            return Response([])
+
+        session_ids = [s.id for s in active_sessions]
+        # Query latest LocationPoint for each active session (efficient single query)
+        from django.db import connection
+        if connection.vendor == 'postgresql':
+            latest_points = {
+                pt.session_id: pt
+                for pt in LocationPoint.objects.filter(session_id__in=session_ids)
+                                             .order_by('session_id', '-recorded_at')
+                                             .distinct('session_id')
+            }
+        else:
+            latest_points = {}
+            for pt in LocationPoint.objects.filter(session_id__in=session_ids).order_by('-recorded_at'):
+                if pt.session_id not in latest_points:
+                    latest_points[pt.session_id] = pt
+
+        can_view_contact = request.user.role in ['MAIN_OFFICER', 'ACP', 'SHO']
+
+        from apps.idols.views import get_height_classification
+
+        markers = []
+        for sess in active_sessions:
+            latest_pt = latest_points.get(sess.id)
+            if not latest_pt or latest_pt.latitude is None or latest_pt.longitude is None:
+                # Omit if no valid latest GPS position
+                continue
+
+            idol = sess.assignment.idol
+            constable = sess.assignment.constable
+            conn_state = get_connection_state(latest_pt.recorded_at)
+            height_val = float(idol.idol_height) if idol.idol_height is not None else None
+
+            markers.append({
+                'id': idol.id,
+                'tracking_session_id': sess.id,
+                'gpid': idol.gpid,
+                'idol_name': idol.name or idol.association_name or 'Idol',
+                'association_name': idol.association_name,
+                'zone': idol.zone,
+                'division': idol.division,
+                'police_station': idol.police_station,
+                'ps_code': idol.ps_code,
+                'procession_state': idol.procession_state,
+                'connection_state': conn_state,
+                'is_origin_marker': False,
+                'latitude': float(latest_pt.latitude),
+                'longitude': float(latest_pt.longitude),
+                'speed': float(latest_pt.speed) if latest_pt.speed is not None else None,
+                'heading': float(latest_pt.heading) if latest_pt.heading is not None else None,
+                'accuracy': float(latest_pt.accuracy) if latest_pt.accuracy is not None else None,
+                'last_gps_timestamp': latest_pt.recorded_at.isoformat() if latest_pt.recorded_at else None,
+                'session_started_at': sess.started_at.isoformat() if sess.started_at else None,
+                'idol_height': height_val,
+                'height_classification': get_height_classification(height_val),
+                'origin_location': idol.address or idol.instal_street or idol.instal_village or 'N/A',
+                'destination': idol.river_name or idol.lake_type or 'Visarjan Site',
+                'owner_name': idol.name or idol.association_name or 'N/A',
+                'assigned_constable': {
+                    'id': constable.id,
+                    'name': constable.get_full_name() or constable.username,
+                    'police_id': constable.police_id,
+                    'phone_number': constable.phone_number if can_view_contact else None
+                } if constable else (
+                    {
+                        'id': None,
+                        'name': sess.assignment.officer_name_snapshot or 'Assigned Officer',
+                        'police_id': sess.assignment.police_id_snapshot,
+                        'phone_number': None
+                    } if sess.assignment else None
+                )
             })
 
-        start_time = points_list[0]['recorded_at']
-        end_time = points_list[-1]['recorded_at']
-
-        # Last point connection freshness
-        last_recorded = points_list[-1]['recorded_at']
-        connection_state = get_connection_state(last_recorded)
-
-        # Calculate actual sequential travelled distance (Haversine)
-        distance_km = calculate_sequential_distance_km(points)
-
-        # Retrieve operational event timeline
-        raw_events = IdolEvent.objects.filter(idol=idol).order_by('timestamp').select_related('actor')
-        events_list = [{
-            'id': ev.id,
-            'event_type': ev.event_type,
-            'label': ev.get_event_type_display(),
-            'timestamp': ev.timestamp,
-            'latitude': ev.latitude,
-            'longitude': ev.longitude,
-            'zone': ev.zone,
-            'actor': ev.actor.get_full_name() or ev.actor.username if ev.actor else None,
-            'metadata': ev.metadata
-        } for ev in raw_events]
-
-        return Response({
-            'gpid': idol.gpid,
-            'idol_name': idol.name,
-            'police_station': idol.police_station,
-            'zone': idol.zone,
-            'procession_state': idol.procession_state,
-            'connection_state': connection_state,
-            'total_points': len(points_list),
-            'summary': {
-                'start_time': start_time,
-                'end_time': end_time,
-                'max_speed_kmh': round(max_speed * 3.6, 2),  # m/s to km/h
-                'distance_travelled_km': distance_km,
-            },
-            'points': points_list,
-            'events': events_list
-        })
+        return Response(markers)
 
 
 class LatestLocationView(APIView):

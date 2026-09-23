@@ -120,10 +120,11 @@ export const IdolDetailDrawer: React.FC<IdolDetailDrawerProps> = ({
         setLoading(false);
       });
 
-    fetchJourney(marker.gpid)
+    fetchJourney(marker.gpid, marker.tracking_session_id)
       .then(setJourneyData)
       .catch(() => setJourneyData(null));
-  }, [marker?.gpid]);
+  }, [marker?.gpid, marker?.tracking_session_id]);
+
 
   // Reset to the Journey tab whenever a new GPID is selected
   useEffect(() => {
@@ -430,11 +431,12 @@ export const IdolDetailDrawer: React.FC<IdolDetailDrawerProps> = ({
                 <span className="font-medium text-[11px]">Timestamp Lookup</span>
               </button>
               <a
-                href={getReportDownloadUrl(marker.gpid)}
+                href={getReportDownloadUrl(marker.gpid, marker.tracking_session_id)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-2.5 rounded-md border bg-elevated border-border-subtle text-text-secondary hover:border-border-default hover:text-text-primary text-left flex items-center gap-2 transition-colors"
               >
+
                 <FileText className="w-4 h-4 shrink-0 text-status-visarjan" />
                 <span className="font-medium text-[11px]">Official PDF</span>
               </a>

@@ -82,9 +82,10 @@ export const DashboardPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex-1 flex flex-col xl:flex-row gap-4 min-h-[380px]">
-          <div className="flex-1 min-h-[320px] rounded-lg overflow-hidden border border-border-subtle relative">
+        <div className="flex-1 flex flex-col xl:flex-row gap-4 min-h-[520px] lg:min-h-[600px]">
+          <div className="flex-1 min-h-[500px] lg:min-h-[580px] rounded-lg overflow-hidden border border-border-subtle relative">
             <LiveMap
+
               markers={filteredMarkers}
               selectedMarker={selectedMarker}
               onSelectMarker={handleSelectMarker}

@@ -96,6 +96,7 @@ export interface Idol {
 
 export interface ActiveMarker {
   id: number;
+  tracking_session_id?: number;
   gpid: string;
   idol_name: string;
   association_name: string;
@@ -193,6 +194,7 @@ export interface IdolTimelineEvent {
 
 export interface JourneyData {
   gpid: string;
+  tracking_session_id?: number;
   idol_name: string;
   police_station: string;
   zone: string;

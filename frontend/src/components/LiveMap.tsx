@@ -188,8 +188,11 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
-  const polylineLayerRef = useRef<L.Polyline | null>(null);
+  const casingPolylineRef = useRef<L.Polyline | null>(null);
+  const highlightPolylineRef = useRef<L.Polyline | null>(null);
+  const startMarkerRef = useRef<L.Marker | null>(null);
   const histMarkerRef = useRef<L.Marker | null>(null);
+  const prevJourneyGpidRef = useRef<string | null>(null);
 
   // Managed Marker Map: Map<GPID, L.Marker> for O(1) in-place differential updates
   const markersMapRef = useRef<Map<string, L.Marker>>(new Map());
@@ -200,6 +203,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   const initialFitDoneRef = useRef<boolean>(false);
   const prevFilterKeyRef = useRef<string>('');
   const prevSelectedGpidRef = useRef<string | null>(null);
+
 
   // Helper for safe programmatic camera transitions without tripping user interaction
   const performProgrammaticCameraAction = useCallback((action: (map: L.Map) => void) => {
@@ -285,7 +289,9 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       mapInstanceRef.current = null;
       markersLayerRef.current = null;
       markersMapRef.current.clear();
-      polylineLayerRef.current = null;
+      casingPolylineRef.current = null;
+      highlightPolylineRef.current = null;
+      startMarkerRef.current = null;
       histMarkerRef.current = null;
     };
   }, []);
@@ -296,9 +302,8 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     const layerGroup = markersLayerRef.current;
     if (!map || !layerGroup) return;
 
-    // When an idol is selected: isolate and show only selected idol marker.
-    // When unselected: restore all active markers!
-    const displayMarkers = selectedMarker ? [selectedMarker] : markers;
+    // All active markers remain visible so officer can click any marker to switch routes
+    const displayMarkers = markers;
     const currentGpidSet = new Set<string>();
 
     displayMarkers.forEach((m) => {
@@ -320,6 +325,8 @@ export const LiveMap: React.FC<LiveMapProps> = ({
           (existing as any)._visualSignature = visualSignature;
         }
 
+        existing.setZIndexOffset(isSelected ? 500 : 0);
+
         // 3. Popup content update
         existing.setPopupContent(buildMarkerPopupHtml(m));
       } else {
@@ -327,6 +334,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
         const marker = L.marker([m.latitude, m.longitude], {
           icon: createMarkerIcon(m, isSelected),
           title: `GPID: ${m.gpid}`,
+          zIndexOffset: isSelected ? 500 : 0,
         });
         (marker as any)._visualSignature = `${m.is_origin_marker}|${isSelected}|${m.height_classification}|${m.connection_state}|${m.procession_state}|${m.idol_height}`;
         marker.bindPopup(buildMarkerPopupHtml(m), { autoPan: false });
@@ -338,7 +346,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       }
     });
 
-    // Remove pruned markers (e.g. filtered out or unselected)
+    // Remove pruned markers (e.g. stopped session or filtered out)
     markersMapRef.current.forEach((marker, gpid) => {
       if (!currentGpidSet.has(gpid)) {
         layerGroup.removeLayer(marker);
@@ -396,30 +404,88 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     }
   }, [markers, selectedMarker, onSelectMarker, filterKey, performProgrammaticCameraAction]);
 
-  // Handle Journey Polyline Trail: fits bounds ONCE upon loading breadcrumbs
+  // Handle Google-Maps-Style Highlighted Polyline Trail: dual-layer path based strictly on recorded GPS telemetry
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    if (polylineLayerRef.current) {
-      map.removeLayer(polylineLayerRef.current);
-      polylineLayerRef.current = null;
+    if (!journeyTrail || journeyTrail.length < 2) {
+      if (casingPolylineRef.current) {
+        map.removeLayer(casingPolylineRef.current);
+        casingPolylineRef.current = null;
+      }
+      if (highlightPolylineRef.current) {
+        map.removeLayer(highlightPolylineRef.current);
+        highlightPolylineRef.current = null;
+      }
+      if (startMarkerRef.current) {
+        map.removeLayer(startMarkerRef.current);
+        startMarkerRef.current = null;
+      }
+      prevJourneyGpidRef.current = null;
+      return;
     }
 
-    if (journeyTrail && journeyTrail.length > 1) {
-      const latlngs: L.LatLngExpression[] = journeyTrail.map((p) => [p.latitude, p.longitude]);
-      const poly = L.polyline(latlngs, {
-        color: '#F59E0B',
-        weight: 4,
-        opacity: 0.85,
-        dashArray: '4, 8',
+    const latlngs: L.LatLngExpression[] = journeyTrail.map((p) => [p.latitude, p.longitude]);
+    const startPoint = latlngs[0];
+    const isNewSession = prevJourneyGpidRef.current !== (selectedMarker?.gpid || null);
+
+    if (casingPolylineRef.current && highlightPolylineRef.current && !isNewSession) {
+      // In-place polyline extension (Zero DOM thrashing, zero map recreation)
+      casingPolylineRef.current.setLatLngs(latlngs);
+      highlightPolylineRef.current.setLatLngs(latlngs);
+    } else {
+      // Clean up previous layers if switching sessions
+      if (casingPolylineRef.current) map.removeLayer(casingPolylineRef.current);
+      if (highlightPolylineRef.current) map.removeLayer(highlightPolylineRef.current);
+      if (startMarkerRef.current) map.removeLayer(startMarkerRef.current);
+
+      // 1. Outer Route Casing (Thick, rounded joins & caps)
+      const casingPoly = L.polyline(latlngs, {
+        color: '#1E3A8A', // Deep navy casing
+        weight: 8,
+        opacity: 0.9,
+        lineCap: 'round',
+        lineJoin: 'round',
       }).addTo(map);
-      polylineLayerRef.current = poly;
+
+      // 2. Inner Highlight Core Line (Vibrant sky blue highlight)
+      const highlightPoly = L.polyline(latlngs, {
+        color: '#38BDF8', // Bright blue highlight core
+        weight: 4,
+        opacity: 1.0,
+        lineCap: 'round',
+        lineJoin: 'round',
+      }).addTo(map);
+
+      // 3. Clear Start Marker at origin GPS
+      const startIcon = L.divIcon({
+        className: 'route-start-marker',
+        html: `
+          <div class="relative flex items-center justify-center" style="width: 22px; height: 22px;">
+            <div style="background-color: #10B981; width: 14px; height: 14px; border-radius: 50%; border: 2.5px solid #FFFFFF; box-shadow: 0 2px 8px rgba(0,0,0,0.6);" title="Procession Start"></div>
+          </div>
+        `,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      });
+      const startMarker = L.marker(startPoint as L.LatLngExpression, {
+        icon: startIcon,
+        zIndexOffset: 300,
+      }).addTo(map);
+
+      casingPolylineRef.current = casingPoly;
+      highlightPolylineRef.current = highlightPoly;
+      startMarkerRef.current = startMarker;
+      prevJourneyGpidRef.current = selectedMarker?.gpid || null;
+
+      // Fit bounds ONCE when a new route is loaded
       performProgrammaticCameraAction((m) => {
-        m.fitBounds(poly.getBounds(), { padding: [40, 40] });
+        m.fitBounds(casingPoly.getBounds(), { padding: [50, 50], maxZoom: 16 });
       });
     }
-  }, [journeyTrail, performProgrammaticCameraAction]);
+  }, [journeyTrail, selectedMarker, performProgrammaticCameraAction]);
+
 
   // Handle Historical Timestamp Lookup Focus Marker
   useEffect(() => {
