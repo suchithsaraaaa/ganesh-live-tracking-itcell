@@ -18,8 +18,22 @@ class AssignmentListView(generics.ListAPIView):
         qs = Assignment.objects.select_related('idol', 'constable', 'assigned_by').all()
         # Filter through idol jurisdiction
         if self.request.user.role == 'CONSTABLE':
-            return qs.filter(constable=self.request.user)
-        return filter_by_jurisdiction(qs, self.request.user, ps_field='idol__police_station', zone_field='idol__zone', division_field='idol__division')
+            qs = qs.filter(constable=self.request.user)
+        else:
+            qs = filter_by_jurisdiction(qs, self.request.user, ps_field='idol__police_station', zone_field='idol__zone', division_field='idol__division')
+
+        is_active_param = self.request.query_params.get('is_active')
+        if is_active_param is not None:
+            if is_active_param.lower() in ('true', '1'):
+                qs = qs.filter(is_active=True)
+            elif is_active_param.lower() in ('false', '0'):
+                qs = qs.filter(is_active=False)
+
+        constable_id = self.request.query_params.get('constable_id')
+        if constable_id:
+            qs = qs.filter(constable_id=constable_id)
+
+        return qs
 
 
 class CreateAssignmentView(APIView):
