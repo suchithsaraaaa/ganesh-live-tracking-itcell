@@ -112,11 +112,38 @@ class Assignment(models.Model):
             IdolEvent.objects.create(
                 idol=idol,
                 gpid=idol.gpid,
-                event_type=IdolEventType.ASSIGNMENT_CREATED,
+                event_type='PROCESSION_ASSIGNED',
                 timestamp=now,
                 zone=idol.zone,
                 actor=assigned_by,
-                metadata={'constable': constable.username, 'police_id': constable.police_id}
+                metadata={
+                    'assignment_id': assignment.id,
+                    'constable': constable.username,
+                    'police_id': constable.police_id,
+                    'assigned_by': assigned_by.username if assigned_by else None,
+                    'zone': idol.zone,
+                    'police_station': idol.police_station,
+                }
+            )
+        except Exception:
+            pass
+
+        try:
+            from apps.audit.models import AuditEvent
+            AuditEvent.objects.create(
+                action='PROCESSION_ASSIGNED',
+                actor=assigned_by,
+                target_id=str(assignment.id),
+                target_model='Assignment',
+                details={
+                    'assignment_id': assignment.id,
+                    'gpid': idol.gpid,
+                    'constable': full_name,
+                    'police_id': constable.police_id or '',
+                    'assigned_by': assigned_by.username if assigned_by else None,
+                    'zone': idol.zone,
+                    'police_station': idol.police_station,
+                }
             )
         except Exception:
             pass

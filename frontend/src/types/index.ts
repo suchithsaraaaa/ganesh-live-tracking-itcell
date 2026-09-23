@@ -229,3 +229,106 @@ export interface Assignment {
   handover_to: number | null;
   created_at: string;
 }
+
+export type HeightBucketFilter = 'all_15_plus' | '15_20' | '21_25' | '26_plus';
+export type AssignmentStatusFilter = 'all' | 'unassigned' | 'assigned';
+
+export interface AssignableIdol {
+  id: number;
+  gpid: string;
+  name: string;
+  association_name: string;
+  idol_height: number;
+  height: number;
+  height_bucket: '15-20' | '21-25' | '26+';
+  height_classification: 'GREEN' | 'YELLOW' | 'RED';
+  zone: string;
+  division: string;
+  police_station: string;
+  ps_code: string;
+  address: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  geocoding_confidence?: string;
+  resolved_address?: string;
+  procession_state: ProcessionState;
+  tracking_state: ConnectionState;
+  assignment: {
+    id: number;
+    status: 'ACTIVE';
+    officer_name: string;
+    officer_id: number;
+    police_id: string;
+    police_station: string;
+    started_at: string;
+  } | null;
+}
+
+export interface AssignableSummary {
+  total_eligible: number;
+  count_15_20: number;
+  count_21_25: number;
+  count_26_plus: number;
+  assigned: number;
+  unassigned: number;
+}
+
+export interface AssignableRegistryResponse {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  summary: AssignableSummary;
+  results: AssignableIdol[];
+}
+
+export interface AssignableIdolDetail {
+  id: number;
+  gpid: string;
+  name: string;
+  association_name: string;
+  idol_height: number;
+  height_bucket: '15-20' | '21-25' | '26+';
+  height_classification: 'GREEN' | 'YELLOW' | 'RED';
+  zone: string;
+  division: string;
+  police_station: string;
+  ps_code: string;
+  address: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  destination: string;
+  procession_state: ProcessionState;
+  connection_state: ConnectionState;
+  last_gps_timestamp?: string | null;
+  assignment: {
+    id: number;
+    status: 'ACTIVE';
+    officer_name: string;
+    officer_id: number;
+    police_id: string;
+    police_station: string;
+    phone_number?: string | null;
+    started_at: string;
+  } | null;
+  contact_info?: {
+    mobile_no: string;
+    email: string;
+  } | null;
+  milestones: {
+    assigned?: string | null;
+    reached_site?: string | null;
+    procession_started?: string | null;
+    reached_visarjan?: string | null;
+    visarjan_completed?: string | null;
+    returned_to_origin?: string | null;
+  };
+  events: Array<{
+    id: number;
+    event_type: string;
+    label: string;
+    timestamp: string;
+    zone: string;
+    actor?: string | null;
+    metadata?: Record<string, any>;
+  }>;
+}

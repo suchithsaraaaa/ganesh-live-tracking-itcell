@@ -1,4 +1,14 @@
-import { Idol, DashboardKPIs, ActiveMarker, TimestampLookupResult, JourneyData, User, Assignment } from '../types';
+import {
+  Idol,
+  DashboardKPIs,
+  ActiveMarker,
+  TimestampLookupResult,
+  JourneyData,
+  User,
+  Assignment,
+  AssignableRegistryResponse,
+  AssignableIdolDetail
+} from '../types';
 
 const API_BASE = '/api/v1';
 
@@ -196,6 +206,57 @@ export async function fetchAssignments(page?: number): Promise<{ count: number; 
   return await res.json();
 }
 
+export async function fetchAssignableRegistry(params?: {
+  page?: number;
+  page_size?: number;
+  zone?: string;
+  police_station?: string;
+  height_bucket?: string;
+  assignment_status?: string;
+  search?: string;
+  ordering?: string;
+}): Promise<AssignableRegistryResponse> {
+  const query = new URLSearchParams();
+  if (params?.page) query.append('page', params.page.toString());
+  if (params?.page_size) query.append('page_size', params.page_size.toString());
+  if (params?.zone && params.zone !== 'All Zones') query.append('zone', params.zone);
+  if (params?.police_station && params.police_station !== 'All Police Stations') query.append('police_station', params.police_station);
+  if (params?.height_bucket && params.height_bucket !== 'All 15+ FT') query.append('height_bucket', params.height_bucket);
+  if (params?.assignment_status && params.assignment_status !== 'all') query.append('assignment_status', params.assignment_status);
+  if (params?.search) query.append('search', params.search);
+  if (params?.ordering) query.append('ordering', params.ordering);
+
+  const res = await apiFetch(`/assignments/registry/?${query.toString()}`);
+  if (!res.ok) throw new ApiError('Failed to load assignable idols registry', res.status);
+  return await res.json();
+}
+
+export async function fetchAssignableIdolDetail(gpid: string): Promise<AssignableIdolDetail> {
+  const res = await apiFetch(`/assignments/registry/${encodeURIComponent(gpid)}/`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new ApiError(err.error || `Failed to load details for ${gpid}`, res.status);
+  }
+  return await res.json();
+}
+
+export function getAssignmentExcelExportUrl(params?: {
+  zone?: string;
+  police_station?: string;
+  height_bucket?: string;
+  assignment_status?: string;
+  search?: string;
+}): string {
+  const query = new URLSearchParams();
+  if (params?.zone && params.zone !== 'All Zones') query.append('zone', params.zone);
+  if (params?.police_station && params.police_station !== 'All Police Stations') query.append('police_station', params.police_station);
+  if (params?.height_bucket && params.height_bucket !== 'All 15+ FT') query.append('height_bucket', params.height_bucket);
+  if (params?.assignment_status && params.assignment_status !== 'all') query.append('assignment_status', params.assignment_status);
+  if (params?.search) query.append('search', params.search);
+
+  return `${API_BASE}/assignments/export/?${query.toString()}`;
+}
+
 export async function assignConstable(gpid: string, constableId: number): Promise<Assignment> {
   const res = await apiFetch('/assignments/create/', {
     method: 'POST',
@@ -295,9 +356,17 @@ export async function deleteUser(id: number): Promise<{ message: string }> {
 // Field Officers Directory
 // ---------------------------------------------------------------------------
 
-export async function fetchAssignableOfficers(policeStation?: string): Promise<{ count: number; results: import('../types').AssignableOfficer[] }> {
+export async function fetchAssignableOfficers(options?: {
+  policeStation?: string;
+  availableOnly?: boolean;
+} | string): Promise<{ count: number; results: import('../types').AssignableOfficer[] }> {
   const query = new URLSearchParams();
-  if (policeStation) query.append('police_station', policeStation);
+  if (typeof options === 'string') {
+    if (options) query.append('police_station', options);
+  } else if (options) {
+    if (options.policeStation) query.append('police_station', options.policeStation);
+    if (options.availableOnly) query.append('available_only', 'true');
+  }
 
   const res = await apiFetch(`/auth/officers/?${query.toString()}`);
   if (!res.ok) throw new ApiError('Failed to load assignable field officers', res.status);

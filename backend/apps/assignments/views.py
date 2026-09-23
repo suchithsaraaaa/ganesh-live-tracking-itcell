@@ -10,12 +10,16 @@ from common.permissions import IsStationOfficerOrAbove, CanAssignFieldOfficers, 
 class AssignmentListView(generics.ListAPIView):
     """
     List assignments with server-side jurisdiction filter.
+    Enforces the authoritative 15 FT+ eligibility rule.
     """
     serializer_class = AssignmentSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         qs = Assignment.objects.select_related('idol', 'constable', 'assigned_by').all()
+        # Rule 1: Only 15+ FT idols are eligible for the assignment workflow
+        qs = qs.filter(idol__idol_height__gte=15)
+
         # Filter through idol jurisdiction
         if self.request.user.role == 'CONSTABLE':
             qs = qs.filter(constable=self.request.user)
@@ -43,7 +47,7 @@ class CreateAssignmentView(APIView):
     permission_classes = [IsStationOfficerOrAbove]
 
     def post(self, request):
-        serializer = CreateAssignmentSerializer(data=request.data)
+        serializer = CreateAssignmentSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
 
         idol = serializer.validated_data['idol_obj']
@@ -201,3 +205,489 @@ class EndAssignmentView(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+class AssignableIdolRegistryView(APIView):
+    """
+    Dedicated operational endpoint for the Officer Assignment page.
+    Enforces the authoritative 15 FT+ eligibility rule, server-side jurisdiction,
+    and hierarchical cascading filters with strict AND logic.
+    Returns paginated GPID records with embedded active assignments and summary KPIs.
+    """
+    permission_classes = [CanAssignFieldOfficers]
+
+    def get(self, request):
+        from apps.idols.models import Idol
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus
+        from apps.tracking.views import get_connection_state
+        from rest_framework.pagination import PageNumberPagination
+        from django.db.models import Q
+        from .serializers import AssignableIdolRegistrySerializer
+
+        # Rule 1 & 29: Base population strictly enforced to idol_height >= 15 FT
+        qs = Idol.objects.filter(idol_height__gte=15)
+
+        # Rule 30: Enforce server-side jurisdiction
+        qs = filter_by_jurisdiction(qs, request.user)
+
+        # Rule 10: Compute authoritative summary KPIs across the user's jurisdiction
+        total_eligible = qs.count()
+        count_15_20 = qs.filter(idol_height__gte=15, idol_height__lt=21).count()
+        count_21_25 = qs.filter(idol_height__gte=21, idol_height__lt=26).count()
+        count_26_plus = qs.filter(idol_height__gte=26).count()
+
+        active_assigned_idol_ids = set(
+            Assignment.objects.filter(
+                is_active=True,
+                idol__in=qs
+            ).values_list('idol_id', flat=True)
+        )
+        assigned_count = len(active_assigned_idol_ids)
+        unassigned_count = max(0, total_eligible - assigned_count)
+
+        # Rule 5: Zone filter
+        zone = request.query_params.get('zone')
+        if zone and zone not in ['All Zones', 'all', '']:
+            qs = qs.filter(zone__iexact=zone.strip())
+
+        # Rule 6: Police Station filter
+        ps = request.query_params.get('police_station')
+        if ps and ps not in ['All Police Stations', 'all', '']:
+            qs = qs.filter(police_station__iexact=ps.strip())
+
+        # Rule 4: Height bucket filter (AND composition)
+        hb = request.query_params.get('height_bucket')
+        if hb and hb not in ['All 15+ FT', 'all', 'all_15_plus', '']:
+            hb_clean = hb.lower().strip()
+            if hb_clean in ['15_20', '15-20', 'green']:
+                qs = qs.filter(idol_height__gte=15, idol_height__lt=21)
+            elif hb_clean in ['21_25', '21-25', 'yellow']:
+                qs = qs.filter(idol_height__gte=21, idol_height__lt=26)
+            elif hb_clean in ['26_plus', '26+', 'above_25', 'red']:
+                qs = qs.filter(idol_height__gte=26)
+
+        # Rule 7: Assignment status filter (AND composition)
+        assignment_status = request.query_params.get('assignment_status')
+        if assignment_status and assignment_status.lower() != 'all':
+            astat = assignment_status.lower().strip()
+            if astat == 'assigned':
+                qs = qs.filter(id__in=active_assigned_idol_ids)
+            elif astat == 'unassigned':
+                qs = qs.exclude(id__in=active_assigned_idol_ids)
+
+        # Rule 8: Secondary search (respects all active filters & 15 FT rule)
+        search = request.query_params.get('search')
+        if search:
+            search = search.strip()
+            qs = qs.filter(
+                Q(gpid__icontains=search) |
+                Q(name__icontains=search) |
+                Q(association_name__icontains=search) |
+                Q(police_station__icontains=search)
+            )
+
+        # Rule 12: Operational sorting (Zone -> Police Station -> Height -> GPID)
+        ordering = request.query_params.get('ordering')
+        if ordering:
+            qs = qs.order_by(ordering)
+        else:
+            qs = qs.order_by('zone', 'police_station', '-idol_height', 'gpid')
+
+        # Rule 31: Server-side pagination (default 25, max 100)
+        paginator = PageNumberPagination()
+        try:
+            page_size = int(request.query_params.get('page_size', 25))
+            paginator.page_size = max(1, min(page_size, 100))
+        except ValueError:
+            paginator.page_size = 25
+
+        page_records = paginator.paginate_queryset(qs, request)
+
+        # Batch lookup active assignments and tracking sessions for current page to prevent N+1 queries
+        page_idol_ids = [idol.id for idol in page_records]
+        active_assignments = {
+            a.idol_id: a
+            for a in Assignment.objects.filter(
+                idol_id__in=page_idol_ids,
+                is_active=True
+            ).select_related('constable')
+        }
+
+        active_sessions = {
+            s.assignment.idol_id: s
+            for s in TrackingSession.objects.filter(
+                assignment__idol_id__in=page_idol_ids,
+                status=TrackingSessionStatus.ACTIVE
+            ).select_related('assignment')
+        }
+
+        active_sessions_map = {}
+        for idol_id, sess in active_sessions.items():
+            latest_pt = sess.location_points.order_by('-recorded_at').first()
+            active_sessions_map[idol_id] = get_connection_state(latest_pt.recorded_at if latest_pt else None)
+
+        serializer = AssignableIdolRegistrySerializer(
+            page_records,
+            many=True,
+            context={
+                'active_assignment_map': active_assignments,
+                'active_sessions_map': active_sessions_map,
+                'request': request,
+            }
+        )
+
+        response_data = paginator.get_paginated_response(serializer.data).data
+        response_data['summary'] = {
+            'total_eligible': total_eligible,
+            'count_15_20': count_15_20,
+            'count_21_25': count_21_25,
+            'count_26_plus': count_26_plus,
+            'assigned': assigned_count,
+            'unassigned': unassigned_count,
+        }
+        return Response(response_data)
+
+
+class AssignableIdolDetailView(APIView):
+    """
+    Detailed operational view for a single GPID in the assignment console.
+    Enforces the authoritative 15 FT+ eligibility rule and returns authoritative
+    procession timeline events from IdolEvent.
+    """
+    permission_classes = [CanAssignFieldOfficers]
+
+    def get(self, request, gpid):
+        from apps.idols.models import Idol
+        from apps.tracking.models import IdolEvent, TrackingSession, TrackingSessionStatus
+        from apps.tracking.views import get_connection_state
+        from .serializers import AssignableIdolRegistrySerializer
+
+        try:
+            idol = Idol.objects.get(gpid__iexact=gpid.strip())
+        except Idol.DoesNotExist:
+            return Response({'error': f'Idol with GPID {gpid} not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Rule 1 & 29: Absolute Eligibility Rule — strictly reject <15 FT
+        if not idol.idol_height or idol.idol_height < 15:
+            return Response(
+                {'error': f'Idol {idol.gpid} (height {idol.idol_height or 0} FT) is ineligible for assignment. Minimum required height is 15 FT.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Rule 30: Jurisdiction verification
+        if not filter_by_jurisdiction(Idol.objects.filter(id=idol.id), request.user).exists():
+            return Response({'error': 'You do not have jurisdiction to view this idol.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Active assignment
+        active_assignment = Assignment.objects.filter(idol=idol, is_active=True).select_related('constable', 'assigned_by').first()
+
+        # Telemetry / connection state
+        active_session = TrackingSession.objects.filter(
+            assignment__idol=idol,
+            status=TrackingSessionStatus.ACTIVE
+        ).order_by('-started_at').first()
+
+        latest_pt = active_session.location_points.order_by('-recorded_at').first() if active_session else None
+        conn_state = get_connection_state(latest_pt.recorded_at if latest_pt else None) if active_session else 'OFFLINE'
+
+        # Rule 27: Procession timeline events from authoritative IdolEvent records
+        raw_events = IdolEvent.objects.filter(idol=idol).order_by('timestamp').select_related('actor')
+        timeline_events = []
+        for ev in raw_events:
+            timeline_events.append({
+                'id': ev.id,
+                'event_type': ev.event_type,
+                'label': ev.get_event_type_display() if hasattr(ev, 'get_event_type_display') else ev.event_type,
+                'timestamp': ev.timestamp.isoformat() if ev.timestamp else None,
+                'zone': ev.zone,
+                'actor': ev.actor.get_full_name() or ev.actor.username if ev.actor else None,
+                'metadata': ev.metadata or {},
+            })
+
+        # Milestone timestamps for the 6 lifecycle stages
+        milestones = {
+            'assigned': active_assignment.started_at.isoformat() if active_assignment else None,
+            'reached_site': None,
+            'procession_started': None,
+            'reached_visarjan': None,
+            'visarjan_completed': None,
+            'returned_to_origin': None,
+        }
+
+        for ev in raw_events:
+            et = ev.event_type.upper()
+            ts = ev.timestamp.isoformat() if ev.timestamp else None
+            if et in ['PROCESSION_ASSIGNED', 'ASSIGNMENT_CREATED'] and not milestones['assigned']:
+                milestones['assigned'] = ts
+            elif et in ['SITE_REACHED', 'HOLDING_POINT_ENTERED'] and not milestones['reached_site']:
+                milestones['reached_site'] = ts
+            elif et in ['TRACKING_STARTED', 'PROCESSION_STARTED'] and not milestones['procession_started']:
+                milestones['procession_started'] = ts
+            elif et in ['VISARJAN_REACHED'] and not milestones['reached_visarjan']:
+                milestones['reached_visarjan'] = ts
+            elif et in ['IMMERSION_COMPLETED'] and not milestones['visarjan_completed']:
+                milestones['visarjan_completed'] = ts
+            elif et in ['RETURNED_TO_ORIGIN', 'TRACKING_STOPPED'] and not milestones['returned_to_origin']:
+                milestones['returned_to_origin'] = ts
+
+        # Contact info: restricted to SHO, ACP, MAIN_OFFICER
+        can_view_contact = request.user.role in ['MAIN_OFFICER', 'ACP', 'SHO'] or request.user.is_superuser
+        raw_meta = idol.raw_metadata or {}
+
+        height_val = float(idol.idol_height)
+        height_bucket = '15-20' if 15.0 <= height_val < 21.0 else ('21-25' if 21.0 <= height_val < 26.0 else '26+')
+        height_class = 'GREEN' if 15.0 <= height_val < 21.0 else ('YELLOW' if 21.0 <= height_val < 26.0 else 'RED')
+
+        return Response({
+            'id': idol.id,
+            'gpid': idol.gpid,
+            'name': idol.name or idol.association_name or 'Idol',
+            'association_name': idol.association_name,
+            'idol_height': height_val,
+            'height_bucket': height_bucket,
+            'height_classification': height_class,
+            'zone': idol.zone,
+            'division': idol.division,
+            'police_station': idol.police_station,
+            'ps_code': idol.ps_code,
+            'address': idol.address or idol.instal_street or 'N/A',
+            'latitude': float(idol.latitude) if idol.latitude else None,
+            'longitude': float(idol.longitude) if idol.longitude else None,
+            'destination': idol.river_name or idol.lake_type or 'Visarjan Site',
+            'procession_state': idol.procession_state,
+            'connection_state': conn_state,
+            'last_gps_timestamp': latest_pt.recorded_at.isoformat() if latest_pt else (idol.updated_at.isoformat() if idol.updated_at else None),
+            'assignment': {
+                'id': active_assignment.id,
+                'status': 'ACTIVE',
+                'officer_name': active_assignment._constable_display(),
+                'officer_id': active_assignment.constable_id,
+                'police_id': (active_assignment.constable.police_id if active_assignment.constable else active_assignment.police_id_snapshot) or '',
+                'police_station': (active_assignment.constable.police_station if active_assignment.constable else '') or '',
+                'phone_number': active_assignment.constable.phone_number if (active_assignment.constable and can_view_contact) else None,
+                'started_at': active_assignment.started_at.isoformat() if active_assignment.started_at else None,
+            } if active_assignment else None,
+            'contact_info': {
+                'mobile_no': raw_meta.get('mobile_no', ''),
+                'email': raw_meta.get('email', ''),
+            } if can_view_contact else None,
+            'milestones': milestones,
+            'events': timeline_events,
+        })
+
+
+class AssignmentExportExcelView(APIView):
+    """
+    Generates and downloads a formatted Excel (.xlsx) file containing
+    all eligible officer assignments and operational details.
+    Accessible to authorized Station Officers and Administrative Officers.
+    """
+    permission_classes = [CanAssignFieldOfficers]
+
+    def get(self, request):
+        import io
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from django.http import HttpResponse
+        from django.utils import timezone
+        from django.db.models import Q
+        from apps.idols.models import Idol
+
+        # Base population: strictly 15 FT+
+        qs = Idol.objects.filter(idol_height__gte=15)
+        qs = filter_by_jurisdiction(qs, request.user)
+
+        # Filters
+        zone = request.query_params.get('zone')
+        if zone and zone not in ['All Zones', 'all', '']:
+            qs = qs.filter(zone__iexact=zone.strip())
+
+        ps = request.query_params.get('police_station')
+        if ps and ps not in ['All Police Stations', 'all', '']:
+            qs = qs.filter(police_station__iexact=ps.strip())
+
+        hb = request.query_params.get('height_bucket')
+        if hb and hb not in ['All 15+ FT', 'all', 'all_15_plus', '']:
+            hb_clean = hb.lower().strip()
+            if hb_clean in ['15_20', '15-20', 'green']:
+                qs = qs.filter(idol_height__gte=15, idol_height__lt=21)
+            elif hb_clean in ['21_25', '21-25', 'yellow']:
+                qs = qs.filter(idol_height__gte=21, idol_height__lt=26)
+            elif hb_clean in ['26_plus', '26+', 'above_25', 'red']:
+                qs = qs.filter(idol_height__gte=26)
+
+        active_assigned_ids = set(
+            Assignment.objects.filter(is_active=True, idol__in=qs).values_list('idol_id', flat=True)
+        )
+
+        assignment_status = request.query_params.get('assignment_status')
+        if assignment_status and assignment_status.lower() != 'all':
+            astat = assignment_status.lower().strip()
+            if astat == 'assigned':
+                qs = qs.filter(id__in=active_assigned_ids)
+            elif astat == 'unassigned':
+                qs = qs.exclude(id__in=active_assigned_ids)
+
+        search = request.query_params.get('search')
+        if search:
+            search = search.strip()
+            qs = qs.filter(
+                Q(gpid__icontains=search) |
+                Q(name__icontains=search) |
+                Q(association_name__icontains=search) |
+                Q(police_station__icontains=search)
+            )
+
+        qs = qs.order_by('zone', 'police_station', '-idol_height', 'gpid')
+
+        # Prefetch active assignments
+        idol_ids = list(qs.values_list('id', flat=True))
+        assignments_by_idol = {
+            a.idol_id: a
+            for a in Assignment.objects.filter(
+                idol_id__in=idol_ids,
+                is_active=True
+            ).select_related('constable', 'assigned_by')
+        }
+
+        # Build Excel Workbook
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Officer Assignments"
+
+        # Department Title Header
+        ws.merge_cells("A1:N1")
+        title_cell = ws["A1"]
+        title_cell.value = "HYDERABAD CITY POLICE — GANESH VISARJAN MONITORING SYSTEM"
+        title_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+        title_cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        title_cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 28
+
+        # Metadata Subheader
+        ws.merge_cells("A2:N2")
+        sub_cell = ws["A2"]
+        sub_cell.value = f"OFFICER ASSIGNMENT & PROCESSION REGISTRY (15 FT+ IDOLS) | Exported on: {timezone.now().strftime('%d-%b-%Y %H:%M:%S IST')} | Records: {len(idol_ids)}"
+        sub_cell.font = Font(name="Calibri", size=10, italic=True, color="94A3B8")
+        sub_cell.fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
+        sub_cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[2].height = 20
+
+        # Column Headers
+        headers = [
+            "S.No",
+            "GPID",
+            "Pandal / Idol Name",
+            "Height (FT)",
+            "Height Category",
+            "Zone",
+            "Police Station",
+            "Assignment Status",
+            "Assigned Officer",
+            "Police ID",
+            "Officer Station",
+            "Assignment Started",
+            "Procession State",
+            "Address / Origin",
+        ]
+        ws.append([]) # row 3 is blank spacer
+        ws.append(headers) # row 4
+        ws.row_dimensions[4].height = 24
+
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="D97706", end_color="D97706", fill_type="solid")
+        thin_border = Border(
+            left=Side(style="thin", color="CBD5E1"),
+            right=Side(style="thin", color="CBD5E1"),
+            top=Side(style="thin", color="CBD5E1"),
+            bottom=Side(style="thin", color="CBD5E1"),
+        )
+
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=4, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+
+        # Populate rows
+        alt_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+        normal_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+
+        row_num = 5
+        can_view_contact = request.user.role in ['MAIN_OFFICER', 'ACP', 'SHO'] or request.user.is_superuser
+
+        for idx, idol in enumerate(qs, start=1):
+            assign = assignments_by_idol.get(idol.id)
+            h_val = float(idol.idol_height) if idol.idol_height else 0.0
+            category = "15–20 FT" if 15.0 <= h_val < 21.0 else ("21–25 FT" if 21.0 <= h_val < 26.0 else "26 FT+")
+
+            officer_name = assign._constable_display() if assign else "—"
+            police_id = (assign.constable.police_id if assign and assign.constable else (assign.police_id_snapshot if assign else "")) or "—"
+            officer_ps = (assign.constable.police_station if assign and assign.constable else "") or "—"
+            started_at = assign.started_at.strftime('%d-%b-%Y %H:%M') if assign and assign.started_at else "—"
+            assignment_status_str = "ASSIGNED" if assign else "UNASSIGNED"
+
+            row_data = [
+                idx,
+                idol.gpid,
+                idol.name or idol.association_name or "Ganesh Idol",
+                f"{h_val:.1f}",
+                category,
+                idol.zone,
+                idol.police_station,
+                assignment_status_str,
+                officer_name,
+                police_id,
+                officer_ps,
+                started_at,
+                idol.get_procession_state_display() if hasattr(idol, 'get_procession_state_display') else idol.procession_state,
+                idol.address or idol.instal_street or "N/A",
+            ]
+            ws.append(row_data)
+            ws.row_dimensions[row_num].height = 20
+
+            fill = alt_fill if idx % 2 == 0 else normal_fill
+            for col_idx in range(1, len(row_data) + 1):
+                cell = ws.cell(row=row_num, column=col_idx)
+                cell.font = Font(name="Calibri", size=10)
+                cell.fill = fill
+                cell.border = thin_border
+                if col_idx in [1, 2, 4, 5, 8, 10, 12]:
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                else:
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+
+            row_num += 1
+
+        # Adjust column widths
+        col_widths = {
+            1: 8,   # S.No
+            2: 22,  # GPID
+            3: 30,  # Pandal Name
+            4: 12,  # Height
+            5: 16,  # Height Category
+            6: 18,  # Zone
+            7: 22,  # Police Station
+            8: 18,  # Assignment Status
+            9: 25,  # Assigned Officer
+            10: 16, # Police ID
+            11: 20, # Officer Station
+            12: 20, # Started At
+            13: 20, # Procession State
+            14: 35, # Address
+        }
+        for col_idx, width in col_widths.items():
+            ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = width
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        filename = f"Hyderabad_Police_Officer_Assignments_{timezone.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        response = HttpResponse(
+            output.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response

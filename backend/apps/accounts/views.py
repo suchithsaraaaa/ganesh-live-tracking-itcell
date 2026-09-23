@@ -233,11 +233,15 @@ class AssignableOfficerDirectoryView(APIView):
             ).select_related('idol')
         }
 
+        available_only = request.query_params.get('available_only', '').lower() in ['true', '1']
+
         officers = []
         for user in qs:
             assigned_gpid = active_assignments.get(user.id)
             user.currently_assigned = assigned_gpid is not None
             user.assigned_gpid = assigned_gpid
+            if available_only and user.currently_assigned:
+                continue
             officers.append(user)
 
         serializer = AssignableOfficerSerializer(officers, many=True)
