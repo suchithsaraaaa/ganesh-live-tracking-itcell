@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Narrowly permit cleartext HTTP exclusively for the production EC2 backend IP.
+         All other traffic remains restricted to secure HTTPS. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">15.206.58.226</domain>
+    </domain-config>
+</network-security-config>

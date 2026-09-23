@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Larger, more detailed rendition of the launcher mark for the login screen —
+     same tracking-pin + temple-tower motif (see ic_launcher_foreground.xml for
+     the rationale), plus a faint outer "coverage ring" and a trailing breadcrumb
+     of dots suggesting a GPS path, to read distinctly as this app's identity
+     rather than just a scaled-up icon. No deity depiction, no government
+     insignia. Colors match ui/theme/Color.kt exactly. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#1B1B18"
+        android:strokeWidth="1.5"
+        android:pathData="M100,100 m-88,0 a88,88 0,1,1 176,0 a88,88 0,1,1 -176,0" />
+    <path
+        android:fillColor="#6B675F"
+        android:pathData="M40,180 m-3,0 a3,3 0,1,1 6,0 a3,3 0,1,1 -6,0" />
+    <path
+        android:fillColor="#6B675F"
+        android:pathData="M29,163 m-2.5,0 a2.5,2.5 0,1,1 5,0 a2.5,2.5 0,1,1 -5,0" />
+    <path
+        android:fillColor="#6B675F"
+        android:pathData="M23,144 m-2,0 a2,2 0,1,1 4,0 a2,2 0,1,1 -4,0" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#D9793B"
+        android:strokeWidth="5"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:pathData="M100,48 L133,63 L133,100 C133,126 117,144 100,156 C83,144 67,126 67,100 L67,63 Z" />
+    <path
+        android:fillColor="#F2EFE9"
+        android:pathData="M81,133 L119,133 L113,117 L87,117 Z" />
+    <path
+        android:fillColor="#F2EFE9"
+        android:pathData="M87,117 L113,117 L107,102 L93,102 Z" />
+    <path
+        android:fillColor="#F2EFE9"
+        android:pathData="M93,102 L107,102 L100,85 Z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#D9793B"
+        android:strokeWidth="3"
+        android:pathData="M100,74 m-8,0 a8,8 0,1,1 16,0 a8,8 0,1,1 -16,0" />
+    <path
+        android:fillColor="#F2EFE9"
+        android:pathData="M100,74 m-3,0 a3,3 0,1,1 6,0 a3,3 0,1,1 -6,0" />
+</vector>
