@@ -1007,15 +1007,20 @@ export const AssignmentsPage: React.FC = () => {
                             <td className="px-4 py-2.5 text-right">
                               {a.is_active && (
                                 <button
-                                  onClick={() =>
+                                  onClick={() => {
+                                    const regItem = registryData.find((r) => r.gpid === a.idol_gpid);
                                     handleOpenEndModal({
                                       id: a.id,
                                       idol_gpid: a.idol_gpid,
                                       police_station: a.police_station,
                                       officer_name: a.constable_name || a.constable_username,
                                       started_at: a.started_at,
-                                    })
-                                  }
+                                      has_active_tracking: regItem
+                                        ? regItem.tracking_state !== 'OFFLINE' ||
+                                          ['TRACKING', 'MOVING', 'HOLDING'].includes(regItem.procession_state)
+                                        : false,
+                                    });
+                                  }}
                                   className="px-2 py-1 text-[11px] font-medium rounded border border-rose-500/30 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 transition-colors cursor-pointer"
                                 >
                                   End

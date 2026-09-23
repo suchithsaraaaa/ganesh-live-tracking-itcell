@@ -152,7 +152,7 @@ class EndAssignmentView(APIView):
 
         with transaction.atomic():
             try:
-                assignment = Assignment.objects.select_for_update().select_related('idol', 'constable').get(pk=pk)
+                assignment = Assignment.objects.select_for_update().get(pk=pk)
             except Assignment.DoesNotExist:
                 return Response(
                     {'error': 'Assignment not found.'},
@@ -208,12 +208,13 @@ class EndAssignmentView(APIView):
                 terminate_tracking=True
             )
 
-            msg = 'Assignment force-ended and active tracking terminated successfully.' if active_session else 'Assignment ended successfully.'
+            tracking_terminated = bool(active_session) or getattr(ended_assignment, '_tracking_terminated', False)
+            msg = 'Assignment force-ended and active tracking terminated successfully.' if tracking_terminated else 'Assignment ended successfully.'
             return Response(
                 {
                     'message': msg,
                     'assignment': AssignmentSerializer(ended_assignment).data,
-                    'tracking_terminated': bool(active_session),
+                    'tracking_terminated': tracking_terminated,
                 },
                 status=status.HTTP_200_OK
             )

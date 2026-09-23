@@ -255,6 +255,8 @@ class Assignment(models.Model):
                 self.idol.procession_state = ProcessionState.NOT_STARTED
                 self.idol.save(update_fields=['procession_state', 'updated_at'])
 
+        has_admin_terminated = bool(active_sessions)
+        self._tracking_terminated = has_admin_terminated
         self.is_active = False
         self.ended_at = now
         if reason:

@@ -193,6 +193,45 @@ export function getReportDownloadUrl(gpid: string, sessionId?: number): string {
   return `${API_BASE}/reports/idols/${gpid}/${query}`;
 }
 
+export async function fetchCompletedReportsRegistry(params?: {
+  page?: number;
+  page_size?: number;
+  search?: string;
+  zone?: string;
+  police_station?: string;
+  visarjan_date?: string;
+  height_bucket?: string;
+  operational_status?: string;
+  ordering?: string;
+}): Promise<import('../types').CompletedReportsResponse> {
+  const query = new URLSearchParams();
+  if (params?.page) query.append('page', params.page.toString());
+  if (params?.page_size) query.append('page_size', params.page_size.toString());
+  if (params?.search) query.append('search', params.search);
+  if (params?.zone && params.zone !== 'all' && params.zone !== 'All Zones') query.append('zone', params.zone);
+  if (params?.police_station && params.police_station !== 'all' && params.police_station !== 'All Police Stations') {
+    query.append('police_station', params.police_station);
+  }
+  if (params?.visarjan_date && params.visarjan_date !== 'all' && params.visarjan_date !== 'All Dates') {
+    query.append('visarjan_date', params.visarjan_date);
+  }
+  if (params?.height_bucket && params.height_bucket !== 'all' && params.height_bucket !== 'All 15+ FT') {
+    query.append('height_bucket', params.height_bucket);
+  }
+  if (params?.operational_status && params.operational_status !== 'all') {
+    query.append('operational_status', params.operational_status);
+  }
+  if (params?.ordering) query.append('ordering', params.ordering);
+
+  const res = await apiFetch(`/reports/registry/?${query.toString()}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(data.error || data.detail || 'Failed to load completed reports registry', res.status);
+  }
+  return await res.json();
+}
+
+
 
 // ---------------------------------------------------------------------------
 // Assignments
@@ -294,7 +333,20 @@ export async function endAssignment(
     body: JSON.stringify({ reason: reason || '', force: force ?? false }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(data.error || 'Failed to end assignment', res.status);
+  if (!res.ok) {
+    const errorMsg =
+      data.error ||
+      data.detail ||
+      data.message ||
+      (res.status === 403
+        ? 'Permission denied. Administrative privilege required to force-end.'
+        : res.status === 404
+        ? 'Assignment not found.'
+        : res.status === 500
+        ? 'Internal server error (500). Please check backend logs.'
+        : `Failed to end assignment (HTTP ${res.status})`);
+    throw new ApiError(errorMsg, res.status);
+  }
   return data;
 }
 

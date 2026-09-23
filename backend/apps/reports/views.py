@@ -1,10 +1,200 @@
+from datetime import date, timedelta, datetime
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from rest_framework import status
 from rest_framework.views import APIView
+from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .services import generate_idol_pdf_report
-from apps.idols.models import Idol
+from rest_framework.pagination import PageNumberPagination
+from django.db.models import Q
+from common.permissions import filter_by_jurisdiction
+from apps.idols.models import Idol, ProcessionState
+from apps.tracking.models import IdolEvent, IdolEventType
+from apps.assignments.models import Assignment
 from apps.audit.models import AuditEvent
+from .services import generate_idol_pdf_report
+from .serializers import CompletedReportRegistrySerializer
+
+
+class CompletedReportsRegistryView(APIView):
+    """
+    Operational registry endpoint for the Reports Page.
+    Enforces that ONLY GPIDs that have reached completed operational status
+    (IMMERSION_COMPLETED) or holding status (HOLDING / SENT_TO_HOLDING) are returned.
+    Also enforces the authoritative 15 FT+ requirement, server-side jurisdiction,
+    and hierarchical cascading AND filters:
+    - zone
+    - police_station (dependent on zone)
+    - visarjan_date (today, tomorrow, YYYY-MM-DD)
+    - height_bucket (15_20, 21_25, 26_plus)
+    - operational_status (all, completed, holding)
+    - search (GPID, organizer/idol name, association, police station)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # 1. Base population: idols >= 15 FT
+        qs = Idol.objects.filter(idol_height__gte=15)
+
+        # 2. Server-side jurisdiction
+        qs = filter_by_jurisdiction(qs, request.user)
+
+        # 3. Operational eligibility: completed immersion or in holding
+        completed_or_holding_condition = (
+            Q(procession_state__in=[ProcessionState.IMMERSION_COMPLETED, ProcessionState.HOLDING]) |
+            Q(operational_events__event_type__in=[
+                IdolEventType.IMMERSION_COMPLETED,
+                IdolEventType.SENT_TO_HOLDING,
+                IdolEventType.HOLDING_POINT_ENTERED,
+                IdolEventType.VISARJAN_NOT_DONE
+            ])
+        )
+        base_eligible_qs = qs.filter(completed_or_holding_condition).distinct()
+
+        # 4. Summary KPIs across all qualifying records in user's jurisdiction
+        total_eligible = base_eligible_qs.count()
+        count_completed = base_eligible_qs.filter(
+            Q(procession_state=ProcessionState.IMMERSION_COMPLETED) |
+            Q(operational_events__event_type=IdolEventType.IMMERSION_COMPLETED)
+        ).distinct().count()
+        count_holding = base_eligible_qs.filter(
+            Q(procession_state=ProcessionState.HOLDING) |
+            Q(operational_events__event_type__in=[
+                IdolEventType.SENT_TO_HOLDING,
+                IdolEventType.HOLDING_POINT_ENTERED,
+                IdolEventType.VISARJAN_NOT_DONE
+            ])
+        ).exclude(procession_state=ProcessionState.IMMERSION_COMPLETED).distinct().count()
+
+        count_15_20 = base_eligible_qs.filter(idol_height__gte=15, idol_height__lt=21).count()
+        count_21_25 = base_eligible_qs.filter(idol_height__gte=21, idol_height__lt=26).count()
+        count_26_plus = base_eligible_qs.filter(idol_height__gte=26).count()
+
+        filtered_qs = base_eligible_qs
+
+        # 5. Cascading AND filters
+        # Zone filter
+        zone = request.query_params.get('zone')
+        if zone and zone not in ['All Zones', 'all', '']:
+            filtered_qs = filtered_qs.filter(zone__iexact=zone.strip())
+
+        # Police Station filter
+        ps = request.query_params.get('police_station')
+        if ps and ps not in ['All Police Stations', 'all', '']:
+            filtered_qs = filtered_qs.filter(police_station__iexact=ps.strip())
+
+        # Height bucket filter
+        hb = request.query_params.get('height_bucket')
+        if hb and hb not in ['All 15+ FT', 'all', 'all_15_plus', '']:
+            hb_clean = hb.lower().strip()
+            if hb_clean in ['15_20', '15-20', 'green']:
+                filtered_qs = filtered_qs.filter(idol_height__gte=15, idol_height__lt=21)
+            elif hb_clean in ['21_25', '21-25', 'yellow']:
+                filtered_qs = filtered_qs.filter(idol_height__gte=21, idol_height__lt=26)
+            elif hb_clean in ['26_plus', '26+', 'above_25', 'red']:
+                filtered_qs = filtered_qs.filter(idol_height__gte=26)
+
+        # Operational status filter
+        op_status = request.query_params.get('operational_status')
+        if op_status and op_status.lower() != 'all':
+            op_clean = op_status.lower().strip()
+            if op_clean in ['completed', 'immersion_completed', 'visarjan_completed']:
+                filtered_qs = filtered_qs.filter(
+                    Q(procession_state=ProcessionState.IMMERSION_COMPLETED) |
+                    Q(operational_events__event_type=IdolEventType.IMMERSION_COMPLETED)
+                ).distinct()
+            elif op_clean in ['holding', 'sent_to_holding']:
+                filtered_qs = filtered_qs.filter(
+                    Q(procession_state=ProcessionState.HOLDING) |
+                    Q(operational_events__event_type__in=[
+                        IdolEventType.SENT_TO_HOLDING,
+                        IdolEventType.HOLDING_POINT_ENTERED,
+                        IdolEventType.VISARJAN_NOT_DONE
+                    ])
+                ).exclude(procession_state=ProcessionState.IMMERSION_COMPLETED).distinct()
+
+        # Visarjan Date filter
+        visarjan_date = request.query_params.get('visarjan_date')
+        if visarjan_date and visarjan_date not in ['All Dates', 'all', '']:
+            vdate_clean = visarjan_date.lower().strip()
+            today = date.today()
+            if vdate_clean == 'today':
+                filtered_qs = filtered_qs.filter(immersion_date=today)
+            elif vdate_clean == 'tomorrow':
+                filtered_qs = filtered_qs.filter(immersion_date=today + timedelta(days=1))
+            else:
+                try:
+                    target_date = datetime.strptime(vdate_clean, '%Y-%m-%d').date()
+                    filtered_qs = filtered_qs.filter(immersion_date=target_date)
+                except ValueError:
+                    pass
+
+        # Search query
+        search = request.query_params.get('search')
+        if search:
+            search = search.strip()
+            filtered_qs = filtered_qs.filter(
+                Q(gpid__icontains=search) |
+                Q(name__icontains=search) |
+                Q(association_name__icontains=search) |
+                Q(police_station__icontains=search)
+            )
+
+        # Ordering
+        ordering = request.query_params.get('ordering')
+        if ordering:
+            filtered_qs = filtered_qs.order_by(ordering)
+        else:
+            filtered_qs = filtered_qs.order_by('zone', 'police_station', '-idol_height', 'gpid')
+
+        # Pagination
+        paginator = PageNumberPagination()
+        try:
+            page_size = int(request.query_params.get('page_size', 25))
+            paginator.page_size = max(1, min(page_size, 100))
+        except ValueError:
+            paginator.page_size = 25
+
+        page_records = paginator.paginate_queryset(filtered_qs, request)
+        page_idol_ids = [idol.id for idol in page_records]
+
+        # Batch-fetch assignments and events to prevent N+1 queries
+        assignments_map = {}
+        for a in Assignment.objects.filter(idol_id__in=page_idol_ids).select_related('constable').order_by('idol_id', '-started_at'):
+            if a.idol_id not in assignments_map:
+                assignments_map[a.idol_id] = a
+
+        events_map = {}
+        qualifying_event_types = [
+            IdolEventType.IMMERSION_COMPLETED,
+            IdolEventType.SENT_TO_HOLDING,
+            IdolEventType.HOLDING_POINT_ENTERED,
+            IdolEventType.VISARJAN_NOT_DONE
+        ]
+        for e in IdolEvent.objects.filter(idol_id__in=page_idol_ids, event_type__in=qualifying_event_types).order_by('idol_id', '-timestamp'):
+            if e.idol_id not in events_map:
+                events_map[e.idol_id] = e
+
+        serializer = CompletedReportRegistrySerializer(
+            page_records,
+            many=True,
+            context={
+                'assignments_map': assignments_map,
+                'events_map': events_map,
+                'request': request,
+            }
+        )
+
+        response_data = paginator.get_paginated_response(serializer.data).data
+        response_data['summary'] = {
+            'total_eligible': total_eligible,
+            'count_completed': count_completed,
+            'count_holding': count_holding,
+            'count_15_20': count_15_20,
+            'count_21_25': count_21_25,
+            'count_26_plus': count_26_plus,
+        }
+        return Response(response_data)
 
 
 class DownloadIdolReportView(APIView):

@@ -372,3 +372,45 @@ export interface EligibleOfficersResponse {
   total_eligible: number;
   officers: EligibleOfficer[];
 }
+
+export interface CompletedReportItem {
+  id: number;
+  gpid: string;
+  name: string;
+  association_name: string;
+  idol_height: number;
+  zone: string;
+  division: string;
+  police_station: string;
+  immersion_date: string | null;
+  procession_state: string;
+  final_state: 'IMMERSION_COMPLETED' | 'SENT_TO_HOLDING' | string;
+  final_state_display: string;
+  assigned_officer?: {
+    id: number | null;
+    name: string;
+    username: string;
+    police_id: string;
+    is_active: boolean;
+  } | null;
+  report_download_url: string;
+  completed_at: string | null;
+}
+
+export interface CompletedReportsSummary {
+  total_eligible: number;
+  count_completed: number;
+  count_holding: number;
+  count_15_20: number;
+  count_21_25: number;
+  count_26_plus: number;
+}
+
+export interface CompletedReportsResponse {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  summary: CompletedReportsSummary;
+  results: CompletedReportItem[];
+}
+
