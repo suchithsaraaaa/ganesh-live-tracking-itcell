@@ -91,6 +91,7 @@ export const DashboardPage: React.FC = () => {
               onClearSelection={handleClearSelection}
               historicalLookup={historicalLookup}
               journeyTrail={journeyTrail}
+              filterKey={`${selectedZone}|${selectedHeightBucket}|${isImmersionsToday}|${selectedStateFilter}`}
             />
           </div>
 

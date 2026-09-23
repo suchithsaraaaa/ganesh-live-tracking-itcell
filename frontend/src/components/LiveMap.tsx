@@ -1,5 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import L from 'leaflet';
+import { Maximize2 } from 'lucide-react';
 import { ActiveMarker, TimestampLookupResult, JourneyBreadcrumb } from '../types';
 
 interface LiveMapProps {
@@ -9,6 +10,7 @@ interface LiveMapProps {
   onClearSelection: () => void;
   historicalLookup: TimestampLookupResult | null;
   journeyTrail: JourneyBreadcrumb[] | null;
+  filterKey?: string;
 }
 
 // Height Classification Palette (Strict Rule: Marker color = Height ONLY)
@@ -104,6 +106,46 @@ function createMarkerIcon(marker: ActiveMarker, isSelected: boolean = false): L.
   });
 }
 
+function buildMarkerPopupHtml(m: ActiveMarker): string {
+  const heightColor = getMarkerHeightColor(m);
+  const heightText = m.idol_height ? `${m.idol_height} ft` : '>=15 ft';
+  const heightCategory = m.height_classification === 'RED'
+    ? '26+ FT'
+    : m.height_classification === 'YELLOW'
+    ? '21–25 FT'
+    : '15–20 FT';
+
+  return `
+    <div style="font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.4; min-width: 190px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; margin-bottom: 6px;">
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; color: #D9793B;">
+          ${m.gpid}
+        </span>
+        <span style="background-color: ${heightColor}20; color: ${heightColor}; border: 1px solid ${heightColor}50; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px;">
+          ${heightText} (${heightCategory})
+        </span>
+      </div>
+      <div style="font-weight: 600; color: #F2EFE9; margin-bottom: 2px;">
+        ${m.idol_name}
+      </div>
+      <div style="color: #9C9890; margin-bottom: 6px;">
+        ${m.association_name || 'Individual Mandap'}
+      </div>
+      <div style="display: grid; grid-template-columns: auto auto; gap: 4px; color: #C7C4BC; font-size: 11px;">
+        <span style="color: #9C9890;">Type:</span> <span>${m.is_origin_marker ? '<span style="color: #94A3B8; font-weight:600;">Origin Location</span>' : '<span style="color: #10B981; font-weight:600;">Live Telemetry</span>'}</span>
+        <span style="color: #9C9890;">Zone:</span> <span>${m.zone}</span>
+        <span style="color: #9C9890;">Police Station:</span> <span>${m.police_station} (${m.ps_code})</span>
+        <span style="color: #9C9890;">Constable:</span> <span>${m.assigned_constable?.name || 'Unassigned'}</span>
+        <span style="color: #9C9890;">Procession:</span> <span style="font-weight: 600; color: #F2EFE9;">${m.procession_state}</span>
+        <span style="color: #9C9890;">Freshness:</span> <span style="font-weight: 600; color: ${m.is_origin_marker ? '#94A3B8' : m.connection_state === 'LIVE' ? '#10B981' : '#F59E0B'};">${m.is_origin_marker ? 'NOT TRACKED' : m.connection_state}</span>
+        ${m.immersion_date ? `<span style="color: #9C9890;">Immersion:</span> <span>${m.immersion_date}</span>` : ''}
+      </div>
+      <div style="margin-top: 6px; font-size: 10px; color: #6B675F; text-align: right;">
+        ${m.is_origin_marker ? 'Static Geocoded Coordinate' : `GPS: ${new Date(m.last_gps_timestamp).toLocaleTimeString()}`}
+      </div>
+    </div>
+  `;
+}
 
 function createHistoricalIcon(): L.DivIcon {
   return L.divIcon({
@@ -125,12 +167,55 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   onClearSelection,
   historicalLookup,
   journeyTrail,
+  filterKey,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const polylineLayerRef = useRef<L.Polyline | null>(null);
   const histMarkerRef = useRef<L.Marker | null>(null);
+
+  // Managed Marker Map: Map<GPID, L.Marker> for O(1) in-place differential updates
+  const markersMapRef = useRef<Map<string, L.Marker>>(new Map());
+
+  // Viewport Invariant Controls
+  const userInteractedRef = useRef<boolean>(false);
+  const isProgrammaticMoveRef = useRef<boolean>(false);
+  const initialFitDoneRef = useRef<boolean>(false);
+  const prevFilterKeyRef = useRef<string>('');
+  const prevSelectedGpidRef = useRef<string | null>(null);
+
+  // Helper for safe programmatic camera transitions without tripping user interaction
+  const performProgrammaticCameraAction = useCallback((action: (map: L.Map) => void) => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    isProgrammaticMoveRef.current = true;
+    action(map);
+    setTimeout(() => {
+      isProgrammaticMoveRef.current = false;
+    }, 450);
+  }, []);
+
+  // Explicit "FIT ALL" Action: user explicitly resets viewport to all visible markers
+  const handleFitAll = useCallback(() => {
+    const map = mapInstanceRef.current;
+    if (!map || markers.length === 0) return;
+
+    const validPoints: [number, number][] = markers
+      .filter((m) => typeof m.latitude === 'number' && typeof m.longitude === 'number' && !isNaN(m.latitude) && !isNaN(m.longitude))
+      .map((m) => [m.latitude, m.longitude] as [number, number]);
+
+    if (validPoints.length > 0) {
+      const bounds = L.latLngBounds(validPoints);
+      if (bounds.isValid()) {
+        performProgrammaticCameraAction((m) => {
+          m.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+        });
+        // Reset userInteracted flag so the current full viewport is acknowledged
+        userInteractedRef.current = false;
+      }
+    }
+  }, [markers, performProgrammaticCameraAction]);
 
   // Initialize Leaflet Map once
   useEffect(() => {
@@ -143,11 +228,6 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       zoomControl: false,
     });
 
-    // Dark basemap tiles. Configurable via VITE_MAP_TILE_URL / VITE_MAP_TILE_ATTRIBUTION
-    // (see .env.example) so the tile provider can be swapped without a code change.
-    // Defaults to Esri's keyless "World Dark Gray" canvas — CartoDB's dark_all tiles
-    // now gate real browser (Origin-checked) requests behind an API key even though
-    // server-side/curl requests succeed, which is why they showed "API KEY REQUIRED".
     const tileUrl = import.meta.env.VITE_MAP_TILE_URL
       || 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
     const tileAttribution = import.meta.env.VITE_MAP_TILE_ATTRIBUTION
@@ -156,9 +236,6 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     L.tileLayer(tileUrl, {
       attribution: tileAttribution,
       maxZoom: 19,
-      // Esri's free World Dark Gray canvas only has native tiles up to ~16 in most
-      // areas; without this Leaflet requests non-existent deep-zoom tiles (seen as
-      // "Map data not available") instead of upscaling the last real tile.
       maxNativeZoom: 16,
     }).addTo(map);
 
@@ -168,99 +245,139 @@ export const LiveMap: React.FC<LiveMapProps> = ({
     markersLayerRef.current = layerGroup;
     mapInstanceRef.current = map;
 
+    // Event listeners to detect manual user interaction
+    // Once the user zooms, drags, or moves the map, polling updates NEVER override the viewport!
+    map.on('movestart', () => {
+      if (!isProgrammaticMoveRef.current) {
+        userInteractedRef.current = true;
+      }
+    });
+    map.on('zoomstart', () => {
+      if (!isProgrammaticMoveRef.current) {
+        userInteractedRef.current = true;
+      }
+    });
+    map.on('dragstart', () => {
+      userInteractedRef.current = true;
+    });
+
     return () => {
       map.remove();
       mapInstanceRef.current = null;
+      markersLayerRef.current = null;
+      markersMapRef.current.clear();
+      polylineLayerRef.current = null;
+      histMarkerRef.current = null;
     };
   }, []);
 
-  // Update Markers based on Selection Mode
+  // Update Markers: Differential in-place updates (Zero DOM thrashing, Zero map resetting)
   useEffect(() => {
     const map = mapInstanceRef.current;
     const layerGroup = markersLayerRef.current;
     if (!map || !layerGroup) return;
 
-    layerGroup.clearLayers();
-
-    // RULE 16: When an officer clicks an idol:
-    // 1. Select the idol.
-    // 2. Hide all other idol markers.
-    // 3. Keep only the selected idol visible.
+    // When an idol is selected: isolate and show only selected idol marker.
     // When unselected: restore all active markers!
     const displayMarkers = selectedMarker ? [selectedMarker] : markers;
+    const currentGpidSet = new Set<string>();
 
     displayMarkers.forEach((m) => {
+      currentGpidSet.add(m.gpid);
       const isSelected = selectedMarker?.gpid === m.gpid;
-      const marker = L.marker([m.latitude, m.longitude], {
-        icon: createMarkerIcon(m, isSelected),
-        title: `GPID: ${m.gpid}`,
-      });
+      const existing = markersMapRef.current.get(m.gpid);
 
-      const heightColor = getMarkerHeightColor(m);
-      const heightText = m.idol_height ? `${m.idol_height} ft` : '>=15 ft';
-      const heightCategory = m.height_classification === 'RED'
-        ? '26+ FT'
-        : m.height_classification === 'YELLOW'
-        ? '21–25 FT'
-        : '15–20 FT';
+      if (existing) {
+        // 1. In-place position update: ONLY move marker coordinates
+        const currentPos = existing.getLatLng();
+        if (Math.abs(currentPos.lat - m.latitude) > 1e-6 || Math.abs(currentPos.lng - m.longitude) > 1e-6) {
+          existing.setLatLng([m.latitude, m.longitude]);
+        }
 
-      // Build Marker Popup
-      const popupHtml = `
-        <div style="font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.4; min-width: 190px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; margin-bottom: 6px;">
-            <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; color: #D9793B;">
-              ${m.gpid}
-            </span>
-            <span style="background-color: ${heightColor}20; color: ${heightColor}; border: 1px solid ${heightColor}50; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px;">
-              ${heightText} (${heightCategory})
-            </span>
-          </div>
-          <div style="font-weight: 600; color: #F2EFE9; margin-bottom: 2px;">
-            ${m.idol_name}
-          </div>
-          <div style="color: #9C9890; margin-bottom: 6px;">
-            ${m.association_name || 'Individual Mandap'}
-          </div>
-          <div style="display: grid; grid-template-columns: auto auto; gap: 4px; color: #C7C4BC; font-size: 11px;">
-            <span style="color: #9C9890;">Type:</span> <span>${m.is_origin_marker ? '<span style="color: #94A3B8; font-weight:600;">Origin Location</span>' : '<span style="color: #10B981; font-weight:600;">Live Telemetry</span>'}</span>
-            <span style="color: #9C9890;">Zone:</span> <span>${m.zone}</span>
-            <span style="color: #9C9890;">Police Station:</span> <span>${m.police_station} (${m.ps_code})</span>
-            <span style="color: #9C9890;">Constable:</span> <span>${m.assigned_constable?.name || 'Unassigned'}</span>
-            <span style="color: #9C9890;">Procession:</span> <span style="font-weight: 600; color: #F2EFE9;">${m.procession_state}</span>
-            <span style="color: #9C9890;">Freshness:</span> <span style="font-weight: 600; color: ${m.is_origin_marker ? '#94A3B8' : m.connection_state === 'LIVE' ? '#10B981' : '#F59E0B'};">${m.is_origin_marker ? 'NOT TRACKED' : m.connection_state}</span>
-            ${m.immersion_date ? `<span style="color: #9C9890;">Immersion:</span> <span>${m.immersion_date}</span>` : ''}
-          </div>
-          <div style="margin-top: 6px; font-size: 10px; color: #6B675F; text-align: right;">
-            ${m.is_origin_marker ? 'Static Geocoded Coordinate' : `GPS: ${new Date(m.last_gps_timestamp).toLocaleTimeString()}`}
-          </div>
-        </div>
-      `;
+        // 2. Icon update: only if visual state changed
+        const visualSignature = `${m.is_origin_marker}|${isSelected}|${m.height_classification}|${m.connection_state}|${m.procession_state}|${m.idol_height}`;
+        if ((existing as any)._visualSignature !== visualSignature) {
+          existing.setIcon(createMarkerIcon(m, isSelected));
+          (existing as any)._visualSignature = visualSignature;
+        }
 
-      marker.bindPopup(popupHtml);
-
-      marker.on('click', () => {
-        onSelectMarker(m);
-      });
-
-      layerGroup.addLayer(marker);
+        // 3. Popup content update
+        existing.setPopupContent(buildMarkerPopupHtml(m));
+      } else {
+        // Create new marker instance
+        const marker = L.marker([m.latitude, m.longitude], {
+          icon: createMarkerIcon(m, isSelected),
+          title: `GPID: ${m.gpid}`,
+        });
+        (marker as any)._visualSignature = `${m.is_origin_marker}|${isSelected}|${m.height_classification}|${m.connection_state}|${m.procession_state}|${m.idol_height}`;
+        marker.bindPopup(buildMarkerPopupHtml(m));
+        marker.on('click', () => {
+          onSelectMarker(m);
+        });
+        layerGroup.addLayer(marker);
+        markersMapRef.current.set(m.gpid, marker);
+      }
     });
 
-    if (selectedMarker) {
-      map.setView([selectedMarker.latitude, selectedMarker.longitude], 15, { animate: true });
-    } else if (displayMarkers.length > 0) {
+    // Remove pruned markers (e.g. filtered out or unselected)
+    markersMapRef.current.forEach((marker, gpid) => {
+      if (!currentGpidSet.has(gpid)) {
+        layerGroup.removeLayer(marker);
+        markersMapRef.current.delete(gpid);
+      }
+    });
+
+    // --- Controlled Viewport Actions ---
+
+    // 1. Initial Load Fit: only runs ONCE if user has not already interacted
+    if (!initialFitDoneRef.current && !userInteractedRef.current && displayMarkers.length > 0) {
       const validPoints: [number, number][] = displayMarkers
         .filter((m) => typeof m.latitude === 'number' && typeof m.longitude === 'number' && !isNaN(m.latitude) && !isNaN(m.longitude))
         .map((m) => [m.latitude, m.longitude] as [number, number]);
+
       if (validPoints.length > 0) {
         const bounds = L.latLngBounds(validPoints);
         if (bounds.isValid()) {
-          map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+          performProgrammaticCameraAction((m) => {
+            m.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+          });
+          initialFitDoneRef.current = true;
         }
       }
     }
-  }, [markers, selectedMarker, onSelectMarker]);
 
-  // Handle Journey Polyline Trail
+    // 2. Explicit Filter Change Fit: if user changes filters, fit to the newly visible subset once
+    if (filterKey && filterKey !== prevFilterKeyRef.current) {
+      prevFilterKeyRef.current = filterKey;
+      if (!selectedMarker && displayMarkers.length > 0) {
+        const validPoints: [number, number][] = displayMarkers
+          .filter((m) => typeof m.latitude === 'number' && typeof m.longitude === 'number' && !isNaN(m.latitude) && !isNaN(m.longitude))
+          .map((m) => [m.latitude, m.longitude] as [number, number]);
+
+        if (validPoints.length > 0) {
+          const bounds = L.latLngBounds(validPoints);
+          if (bounds.isValid()) {
+            performProgrammaticCameraAction((m) => {
+              m.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+            });
+            userInteractedRef.current = false;
+          }
+        }
+      }
+    }
+
+    // 3. Selection change: center on selected marker ONCE when first selected
+    if (selectedMarker?.gpid !== prevSelectedGpidRef.current) {
+      prevSelectedGpidRef.current = selectedMarker ? selectedMarker.gpid : null;
+      if (selectedMarker) {
+        performProgrammaticCameraAction((m) => {
+          m.setView([selectedMarker.latitude, selectedMarker.longitude], 15, { animate: true });
+        });
+      }
+    }
+  }, [markers, selectedMarker, onSelectMarker, filterKey, performProgrammaticCameraAction]);
+
+  // Handle Journey Polyline Trail: fits bounds ONCE upon loading breadcrumbs
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -279,9 +396,11 @@ export const LiveMap: React.FC<LiveMapProps> = ({
         dashArray: '4, 8',
       }).addTo(map);
       polylineLayerRef.current = poly;
-      map.fitBounds(poly.getBounds(), { padding: [40, 40] });
+      performProgrammaticCameraAction((m) => {
+        m.fitBounds(poly.getBounds(), { padding: [40, 40] });
+      });
     }
-  }, [journeyTrail]);
+  }, [journeyTrail, performProgrammaticCameraAction]);
 
   // Handle Historical Timestamp Lookup Focus Marker
   useEffect(() => {
@@ -311,13 +430,28 @@ export const LiveMap: React.FC<LiveMapProps> = ({
       `;
       marker.bindPopup(histPopupHtml).openPopup();
       histMarkerRef.current = marker;
-      map.setView([np.latitude, np.longitude], 16, { animate: true });
+      performProgrammaticCameraAction((m) => {
+        m.setView([np.latitude, np.longitude], 16, { animate: true });
+      });
     }
-  }, [historicalLookup]);
+  }, [historicalLookup, performProgrammaticCameraAction]);
 
   return (
     <div className="relative w-full h-full flex-1">
       <div ref={mapContainerRef} className="w-full h-full" />
+
+      {/* Explicit FIT ALL Map Control */}
+      <div className="absolute top-3 right-3 z-[1000]">
+        <button
+          onClick={handleFitAll}
+          id="btn-fit-all"
+          className="flex items-center space-x-1.5 px-3 py-1.5 bg-elevated/90 hover:bg-elevated border border-border-default hover:border-accent/60 text-text-primary rounded-md shadow-lg backdrop-blur-md transition-all text-xs font-medium cursor-pointer"
+          title="Fit view to all visible idols"
+        >
+          <Maximize2 className="w-3.5 h-3.5 text-accent" />
+          <span>Fit All</span>
+        </button>
+      </div>
 
       {/* Honest Empty State Overlay */}
       {markers.length === 0 && (
@@ -363,7 +497,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
           </div>
           <button
             onClick={onClearSelection}
-            className="ml-3 p-1.5 rounded bg-elevated-2 hover:bg-border-default/50 text-text-secondary hover:text-text-primary transition-colors"
+            className="ml-3 p-1.5 rounded bg-elevated-2 hover:bg-border-default/50 text-text-secondary hover:text-text-primary transition-colors cursor-pointer"
             title="Restore all markers"
           >
             <span className="text-[11px] font-medium px-1">Restore Map</span>
@@ -371,7 +505,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({
         </div>
       )}
 
-      {/* Compact Operational Map Legend */}
+      {/* Compact Operational Map Legend (Dual-Dimension: Height vs Telemetry) */}
       <div className="absolute bottom-4 left-4 z-[1000] bg-elevated/90 border border-border-default/60 backdrop-blur-md rounded-md p-2.5 shadow-xl text-[11px] pointer-events-auto">
         <div className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">
           Idol Height

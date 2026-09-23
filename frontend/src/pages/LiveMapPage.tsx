@@ -64,6 +64,7 @@ export const LiveMapPage: React.FC = () => {
           onClearSelection={handleClearSelection}
           historicalLookup={historicalLookup}
           journeyTrail={journeyTrail}
+          filterKey={`${selectedZone}|${selectedPs}|${selectedHeightBucket}|${isImmersionsToday}|${searchTerm}|${selectedStateFilter}`}
         />
       </div>
 

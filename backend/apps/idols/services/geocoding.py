@@ -104,16 +104,20 @@ def normalize_police_station(ps: str) -> str:
 
 def sanitize_address_for_geocoding(text: str) -> str:
     """
-    Strips noise, plot/house numbers like '21-4-330/1' or 'H.No: 12-3',
+    Strips noise, newlines, plot/house numbers like '21-4-330/1' or 'H.No: 12-3',
     leaving recognizable street and locality names for the geocoder.
     """
     if not text:
         return ""
+    # Normalize newlines and carriage returns to spaces
+    cleaned = text.replace('\r', ' ').replace('\n', ' ')
     # Strip landmark prepositions like 'opp to ...', 'opposite ...', 'near ...', 'beside ...'
-    cleaned = re.sub(r'\b(opp(\.?|osite)|near|beside|behind|adj(\.?|acent))\s+(to\s+)?[^,]+', '', text, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\b(opp(\.?|osite)|near|beside|behind|adj(\.?|acent))\s+(to\s+)?[^,]+', '', cleaned, flags=re.IGNORECASE)
     # Remove house number prefixes like '21-4-330/1', '12-3-45', 'H.No 12'
     cleaned = re.sub(r'\b\d{1,4}[-/]\d{1,4}[-/]?\d{0,4}[A-Za-z0-9/]*\b', '', cleaned)
     cleaned = re.sub(r'\b(h\.?no|house\s*no|plot\s*no|door\s*no)\b[:\s\d/-]*', '', cleaned, flags=re.IGNORECASE)
+    # Remove common administrative suffix noise
+    cleaned = re.sub(r'\b(r\.?r\.?\s*dist(rict)?|telangana|india|\d{6})\b', '', cleaned, flags=re.IGNORECASE)
     # Remove stray punctuation and extra whitespace
     cleaned = re.sub(r'[,/\\;-]+', ' ', cleaned)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
@@ -189,8 +193,9 @@ def get_geocoder(provider: Optional[str] = None) -> BaseGeocoder:
 def geocode_idol(idol: Idol, geocoder: Optional[BaseGeocoder] = None) -> Dict[str, Any]:
     """
     Safely resolves geographic coordinates for an Idol without transmitting sensitive personal data.
-    Only sends geographic components (street, village/locality, police station, Hyderabad).
+    Only sends geographic components (street, village/locality, police station).
     Applies a structured multi-tier fallback pipeline.
+    Zero fabricated coordinates: returns UNRESOLVED with None coordinates if unverified.
     """
     if geocoder is None:
         geocoder = get_geocoder()
@@ -207,21 +212,35 @@ def geocode_idol(idol: Idol, geocoder: Optional[BaseGeocoder] = None) -> Dict[st
     if street_clean and len(street_clean) > 3:
         if ps_norm and ps_norm.lower() not in street_clean.lower():
             queries.append((f"{street_clean}, {ps_norm}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "high"))
+            queries.append((f"{street_clean}, {ps_norm}, Telangana, India", GeocodingStatus.GEOCODED, "high"))
         queries.append((f"{street_clean}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "high"))
+        queries.append((f"{street_clean}, Telangana, India", GeocodingStatus.GEOCODED, "high"))
 
-    # Strategy 2: Clean Address Line + Hyderabad
+    # Strategy 2: Clean Address Line + PS / Hyderabad / Telangana
     if addr_clean and addr_clean != street_clean and len(addr_clean) > 3:
         if ps_norm and ps_norm.lower() not in addr_clean.lower():
             queries.append((f"{addr_clean}, {ps_norm}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "medium"))
+            queries.append((f"{addr_clean}, {ps_norm}, Telangana, India", GeocodingStatus.GEOCODED, "medium"))
         queries.append((f"{addr_clean}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "medium"))
+        queries.append((f"{addr_clean}, Telangana, India", GeocodingStatus.GEOCODED, "medium"))
+
+        # Strategy 2B: Sub-token exploration if address contains commas/spaces (e.g. "Iqbal Gunj, Puranapul")
+        parts = [p.strip() for p in re.split(r'[,]+', idol.address or '') if len(p.strip()) > 3]
+        for part in parts:
+            p_clean = sanitize_address_for_geocoding(part)
+            if p_clean and len(p_clean) > 3 and p_clean != addr_clean:
+                queries.append((f"{p_clean}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "medium"))
+                queries.append((f"{p_clean}, Telangana, India", GeocodingStatus.GEOCODED, "medium"))
 
     # Strategy 3: Village / Sub-locality if distinct
     if village_clean and village_clean not in [street_clean, addr_clean] and len(village_clean) > 3:
         queries.append((f"{village_clean}, Hyderabad, Telangana, India", GeocodingStatus.GEOCODED, "medium"))
+        queries.append((f"{village_clean}, Telangana, India", GeocodingStatus.GEOCODED, "medium"))
 
-    # Strategy 4: Police Station area jurisdiction + Hyderabad (Partial / Area level)
+    # Strategy 4: Police Station area jurisdiction (Partial / Locality level)
     if ps_norm:
         queries.append((f"{ps_norm}, Hyderabad, Telangana, India", GeocodingStatus.PARTIAL, "locality"))
+        queries.append((f"{ps_norm}, Telangana, India", GeocodingStatus.PARTIAL, "locality"))
 
     seen_queries = set()
     for query_str, candidate_status, confidence_label in queries:
