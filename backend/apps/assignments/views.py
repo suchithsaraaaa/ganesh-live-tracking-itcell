@@ -140,71 +140,83 @@ class EndAssignmentView(APIView):
     """
     Safely ends an active assignment without deleting historical records.
     Enforces RBAC/jurisdiction: restricted to Station Officer or above.
-    Enforces active tracking session safety: if an active TrackingSession exists,
-    blocks ending with 400 and clear explanation to stop the procession first.
+    Authorized ADMIN (MAIN_OFFICER or superuser) can force-end assignments even
+    when active tracking exists, safely terminating the tracking session atomically.
+    Non-admin officers (ACP/SHO) can only end assignments without active tracking sessions.
     """
     permission_classes = [CanAssignFieldOfficers]
 
     def post(self, request, pk):
-        try:
-            assignment = Assignment.objects.select_related('idol', 'constable').get(pk=pk)
-        except Assignment.DoesNotExist:
-            return Response(
-                {'error': 'Assignment not found.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        if not assignment.is_active:
-            return Response(
-                {'error': 'Assignment is already ended.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Enforce server-side jurisdiction
-        user = request.user
-        if not (user.is_superuser or user.role == 'MAIN_OFFICER'):
-            if user.role == 'ACP':
-                if user.zone and assignment.idol.zone and assignment.idol.zone.lower() != user.zone.lower():
-                    return Response(
-                        {'error': 'You do not have jurisdiction to end assignments in this zone.'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
-            elif user.role == 'SHO':
-                if user.police_station and assignment.idol.police_station and assignment.idol.police_station.lower() != user.police_station.lower():
-                    return Response(
-                        {'error': 'You do not have jurisdiction to end assignments in this police station.'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
-            else:
-                return Response({'error': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
-
-        # Active tracking session safety check
+        from django.db import transaction
         from apps.tracking.models import TrackingSession, TrackingSessionStatus
-        active_session = TrackingSession.objects.filter(
-            assignment=assignment,
-            status__in=[TrackingSessionStatus.ACTIVE, TrackingSessionStatus.STARTED]
-        ).first()
 
-        if active_session:
+        with transaction.atomic():
+            try:
+                assignment = Assignment.objects.select_for_update().select_related('idol', 'constable').get(pk=pk)
+            except Assignment.DoesNotExist:
+                return Response(
+                    {'error': 'Assignment not found.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            if not assignment.is_active:
+                return Response(
+                    {'error': 'Assignment is already ended.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Enforce server-side jurisdiction
+            user = request.user
+            is_admin = user.is_superuser or user.role == 'MAIN_OFFICER'
+
+            if not is_admin:
+                if user.role == 'ACP':
+                    if user.zone and assignment.idol.zone and assignment.idol.zone.lower() != user.zone.lower():
+                        return Response(
+                            {'error': 'You do not have jurisdiction to end assignments in this zone.'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                elif user.role == 'SHO':
+                    if user.police_station and assignment.idol.police_station and assignment.idol.police_station.lower() != user.police_station.lower():
+                        return Response(
+                            {'error': 'You do not have jurisdiction to end assignments in this police station.'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                else:
+                    return Response({'error': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+
+            # Active tracking session safety check
+            active_session = TrackingSession.objects.filter(
+                assignment=assignment,
+                status__in=[TrackingSessionStatus.ACTIVE, TrackingSessionStatus.STARTED]
+            ).first()
+
+            if active_session and not is_admin:
+                return Response(
+                    {
+                        'error': 'Administrative privilege required to force-end an assignment with an active tracking session. Stop the procession before ending the assignment.',
+                        'has_active_tracking': True,
+                        'tracking_session_id': active_session.id
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            reason = request.data.get('reason', '')
+            ended_assignment = assignment.end_assignment(
+                actor=request.user,
+                reason=reason,
+                terminate_tracking=True
+            )
+
+            msg = 'Assignment force-ended and active tracking terminated successfully.' if active_session else 'Assignment ended successfully.'
             return Response(
                 {
-                    'error': 'This officer currently has an active tracking session. Stop the procession before ending the assignment.',
-                    'has_active_tracking': True,
-                    'tracking_session_id': active_session.id
+                    'message': msg,
+                    'assignment': AssignmentSerializer(ended_assignment).data,
+                    'tracking_terminated': bool(active_session),
                 },
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_200_OK
             )
-
-        reason = request.data.get('reason', '')
-        ended_assignment = assignment.end_assignment(actor=request.user, reason=reason)
-
-        return Response(
-            {
-                'message': 'Assignment ended successfully.',
-                'assignment': AssignmentSerializer(ended_assignment).data
-            },
-            status=status.HTTP_200_OK
-        )
 
 
 class AssignableIdolRegistryView(APIView):
@@ -421,7 +433,7 @@ class AssignableIdolDetailView(APIView):
                 'metadata': ev.metadata or {},
             })
 
-        # Milestone timestamps for the 6 lifecycle stages
+        # Milestone timestamps for the lifecycle stages
         milestones = {
             'assigned': active_assignment.started_at.isoformat() if active_assignment else None,
             'reached_site': None,
@@ -429,6 +441,7 @@ class AssignableIdolDetailView(APIView):
             'reached_visarjan': None,
             'visarjan_completed': None,
             'returned_to_origin': None,
+            'admin_terminated': None,
         }
 
         for ev in raw_events:
@@ -444,8 +457,10 @@ class AssignableIdolDetailView(APIView):
                 milestones['reached_visarjan'] = ts
             elif et in ['IMMERSION_COMPLETED'] and not milestones['visarjan_completed']:
                 milestones['visarjan_completed'] = ts
-            elif et in ['RETURNED_TO_ORIGIN', 'TRACKING_STOPPED'] and not milestones['returned_to_origin']:
+            elif et == 'RETURNED_TO_ORIGIN' and not milestones['returned_to_origin']:
                 milestones['returned_to_origin'] = ts
+            elif et in ['PROCESSION_ADMIN_TERMINATED', 'ASSIGNMENT_FORCE_ENDED'] and not milestones['admin_terminated']:
+                milestones['admin_terminated'] = ts
 
         # Contact info: restricted to SHO, ACP, MAIN_OFFICER
         can_view_contact = request.user.role in ['MAIN_OFFICER', 'ACP', 'SHO'] or request.user.is_superuser

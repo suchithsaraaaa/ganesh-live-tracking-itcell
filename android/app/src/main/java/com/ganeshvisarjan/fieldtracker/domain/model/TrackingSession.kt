@@ -10,6 +10,7 @@ enum class TrackingSessionStatus {
     ACTIVE,
     STOP_REQUESTED,
     STOPPED,
+    REMOTELY_TERMINATED,
     SYNC_PENDING,
     SYNCED,
     FAILED,

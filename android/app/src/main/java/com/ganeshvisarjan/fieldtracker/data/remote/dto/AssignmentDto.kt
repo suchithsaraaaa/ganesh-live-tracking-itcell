@@ -79,6 +79,7 @@ data class IdolDto(
     @SerialName("idol_height") val idolHeightFeet: Double? = null,
     val address: String? = null,
     val zone: String? = null,
+    @SerialName("police_station") val policeStation: String? = null,
     @SerialName("river_name") val riverName: String? = null,
     val latitude: Double? = null,
     val longitude: Double? = null,

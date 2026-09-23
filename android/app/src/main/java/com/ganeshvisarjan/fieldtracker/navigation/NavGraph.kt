@@ -45,9 +45,21 @@ fun AppNavGraph(navController: NavHostController = rememberNavController()) {
 
         composable(Destinations.HOME) {
             HomeScreen(
-                onOpenAssignment = { navController.navigate(Destinations.ASSIGNMENT) },
-                onOpenActiveTracking = { navController.navigate(Destinations.TRACKING) },
-                onOpenProfile = { navController.navigate(Destinations.PROFILE) },
+                onOpenAssignment = {
+                    navController.navigate(Destinations.ASSIGNMENT) {
+                        launchSingleTop = true
+                    }
+                },
+                onOpenActiveTracking = {
+                    navController.navigate(Destinations.TRACKING) {
+                        launchSingleTop = true
+                    }
+                },
+                onOpenProfile = {
+                    navController.navigate(Destinations.PROFILE) {
+                        launchSingleTop = true
+                    }
+                },
             )
         }
 
@@ -56,13 +68,20 @@ fun AppNavGraph(navController: NavHostController = rememberNavController()) {
                 onProcessionStarted = {
                     navController.navigate(Destinations.TRACKING) {
                         popUpTo(Destinations.HOME)
+                        launchSingleTop = true
                     }
                 },
             )
         }
 
         composable(Destinations.TRACKING) {
-            TrackingScreen()
+            TrackingScreen(
+                onNavigateHome = {
+                    navController.navigate(Destinations.HOME) {
+                        popUpTo(Destinations.HOME) { inclusive = true }
+                    }
+                },
+            )
         }
 
         composable(Destinations.PROFILE) {

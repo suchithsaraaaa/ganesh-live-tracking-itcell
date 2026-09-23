@@ -67,6 +67,19 @@ class MockTrackingRepository @Inject constructor(
         }
     }
 
+    override suspend fun getActiveSessionOnce(): TrackingSession? =
+        sessionDao.getActiveSessionOnce()?.let {
+            TrackingSession(
+                it.localSessionId, it.serverSessionId, it.gpid, it.assignmentId, it.startedAt, it.stoppedAt,
+                TrackingSessionStatus.valueOf(it.status), GeoPoint.ofOrNull(it.startLatitude, it.startLongitude),
+            )
+        }
+
+    override suspend fun terminateSessionRemotely(localSessionId: String) {
+        sessionDao.markStopped(localSessionId, TrackingSessionStatus.REMOTELY_TERMINATED.name, System.currentTimeMillis())
+        TrackingLog.sessionStopped("mock-remotely-terminated-$localSessionId")
+    }
+
     override suspend fun recordTelemetryPoint(
         sessionLocalId: String,
         gpid: String,

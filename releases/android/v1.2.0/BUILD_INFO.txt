@@ -1,0 +1,35 @@
+Application:
+TG Police Visarjan Tracker
+
+Application ID:
+com.ganeshvisarjan.fieldtracker
+
+Version:
+1.2.0
+
+Version Code:
+3
+
+Build Type:
+Production Release
+
+Signing:
+Signed
+
+Min SDK:
+26
+
+Target SDK:
+34
+
+Build timestamp:
+2026-09-24T00:06:43+05:30
+
+APK size:
+2169438 bytes
+
+SHA-256:
+0c652d3f3250b119ac45ad8f2e704fca61cd19f0d5b3364971b0cfbf18088c1d
+
+Git commit:
+c70d83a82417e43eab6cbf6b64e1451fe7abaf2c

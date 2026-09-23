@@ -19,8 +19,6 @@ import com.ganeshvisarjan.fieldtracker.domain.repository.ProcessionRepository
 import com.ganeshvisarjan.fieldtracker.domain.repository.TrackingRepository
 import com.ganeshvisarjan.fieldtracker.domain.usecase.ProcessionStateMachine
 import com.ganeshvisarjan.fieldtracker.service.TrackingServiceState
-import com.ganeshvisarjan.fieldtracker.worker.SyncScheduler
-import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,9 +30,7 @@ import org.junit.runner.RunWith
 /**
  * Tests the actual state/action behavior for every reachable [ProcessionState]:
  * the correct status text is shown, and exactly the buttons
- * [ProcessionStateMachine.availableEvents] allows for that state are offered —
- * not just "some text exists somewhere". [TrackingViewModel] is constructed
- * directly (bypassing `hiltViewModel()`) against faked repositories.
+ * [ProcessionStateMachine.availableEvents] allows for that state are offered.
  */
 @RunWith(AndroidJUnit4::class)
 class TrackingScreenTest {
@@ -52,14 +48,14 @@ class TrackingScreenTest {
         status = TrackingSessionStatus.ACTIVE,
     )
 
-    private fun buildViewModel(state: ProcessionState): TrackingViewModel {
+    private fun buildViewModel(processionState: ProcessionState): TrackingViewModel {
         val trackingRepository: TrackingRepository = mockk {
             every { observeActiveSession() } returns flowOf(session)
             every { observePendingTelemetryCount() } returns flowOf(0)
             every { observeLastSyncError() } returns flowOf(null)
         }
         val processionRepository: ProcessionRepository = mockk {
-            every { observeState(session.gpid) } returns flowOf(state)
+            every { observeState(session.gpid) } returns flowOf(processionState)
             every { observeTimeline(session.gpid) } returns flowOf(
                 listOf(
                     ProcessionEventRecord(
@@ -81,6 +77,7 @@ class TrackingScreenTest {
             trackingRepository = trackingRepository,
             processionRepository = processionRepository,
             assignmentRepository = assignmentRepository,
+            locationClient = mockk(relaxed = true),
             networkMonitor = networkMonitor,
             serviceState = TrackingServiceState(),
             syncScheduler = mockk(relaxed = true),
@@ -97,15 +94,7 @@ class TrackingScreenTest {
 
         val expectedActions = ProcessionStateMachine.availableEvents(state)
         expectedActions.forEach { action ->
-            val label = when (action) {
-                ProcessionEventType.PROCESSION_STARTED -> "PROCESSION STARTED"
-                ProcessionEventType.MOVING -> "MOVING"
-                ProcessionEventType.REACHED_VISARJAN_AREA -> "REACHED VISARJAN AREA"
-                ProcessionEventType.VISARJAN_DONE -> "VISARJAN DONE"
-                ProcessionEventType.HOLDING -> "PUT IN HOLDING"
-                ProcessionEventType.RETURNING_TO_PANDAL -> "RETURNING TO PANDAL"
-                ProcessionEventType.RETURNED_TO_PANDAL -> "RETURNED TO PANDAL"
-            }
+            val label = actionLabel(action)
             composeRule.onNodeWithText(label).assertExists()
         }
 
@@ -114,29 +103,25 @@ class TrackingScreenTest {
     }
 
     @Test
-    fun processionStarted_offersOnlyMoving() = assertStateAndActions(ProcessionState.PROCESSION_STARTED)
+    fun processionStarted_offersReachedVisarjanSite() = assertStateAndActions(ProcessionState.PROCESSION_STARTED)
 
     @Test
-    fun moving_offersOnlyReachedVisarjanArea() = assertStateAndActions(ProcessionState.MOVING)
+    fun reachedVisarjanSite_offersVisarjanDoneAndNotDone() = assertStateAndActions(ProcessionState.REACHED_VISARJAN_SITE)
 
     @Test
-    fun reachedVisarjanArea_offersVisarjanDoneAndHolding() = assertStateAndActions(ProcessionState.REACHED_VISARJAN_AREA)
+    fun visarjanNotDone_offersSendToHoldingAndVisarjanDone() = assertStateAndActions(ProcessionState.VISARJAN_NOT_DONE)
 
     @Test
-    fun holding_offersOnlyReturningToPandal() = assertStateAndActions(ProcessionState.HOLDING)
+    fun sentToHolding_offersReturnToOriginAndVisarjanSite() = assertStateAndActions(ProcessionState.SENT_TO_HOLDING)
 
     @Test
-    fun returningToPandal_offersOnlyReturnedToPandal() = assertStateAndActions(ProcessionState.RETURNING_TO_PANDAL)
-
-    @Test
-    fun returnedToPandal_isTerminal_offersNoFurtherActions() {
+    fun returnedToOrigin_isTerminal_offersNoFurtherActions() {
         composeRule.setContent {
-            TrackingScreen(viewModel = buildViewModel(ProcessionState.RETURNED_TO_PANDAL))
+            TrackingScreen(viewModel = buildViewModel(ProcessionState.RETURNED_TO_ORIGIN))
         }
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithTag("procession_state_header").assertTextEquals("RETURNED TO PANDAL")
-        // Still offered — stopping tracking is independent of procession state (spec section 25).
+        composeRule.onNodeWithTag("procession_state_header").assertTextEquals("RETURNED TO ORIGIN")
         composeRule.onNodeWithText("STOP TRACKING").assertExists()
     }
 

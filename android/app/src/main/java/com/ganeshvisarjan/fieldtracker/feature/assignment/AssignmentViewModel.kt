@@ -13,12 +13,17 @@ import com.ganeshvisarjan.fieldtracker.domain.repository.TrackingRepository
 import com.ganeshvisarjan.fieldtracker.domain.usecase.ValidateProcessionStartUseCase
 import com.ganeshvisarjan.fieldtracker.location.LocationClient
 import com.ganeshvisarjan.fieldtracker.location.LocationPermissions
+import com.ganeshvisarjan.fieldtracker.location.LocationSetupStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import timber.log.Timber
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 
 data class AssignmentUiState(
@@ -30,6 +35,18 @@ data class AssignmentUiState(
     val startError: String? = null,
     val startedSessionLocalId: String? = null,
     val hasPreciseLocationPermission: Boolean = false,
+    val setupStatus: LocationSetupStatus = LocationSetupStatus(
+        hasFineLocation = false,
+        hasCoarseLocation = false,
+        isLocationServiceEnabled = false,
+        hasNotificationPermission = false,
+        isBatteryOptimizationIgnored = false,
+    ),
+    val isRecordingReachedSite: Boolean = false,
+    val reachedSiteRecorded: Boolean = false,
+    val reachedSiteTimestamp: String? = null,
+    val reachedSiteCoordinates: String? = null,
+    val reachedSiteError: String? = null,
 )
 
 @HiltViewModel
@@ -42,6 +59,8 @@ class AssignmentViewModel @Inject constructor(
     private val validateStart: ValidateProcessionStartUseCase,
 ) : ViewModel() {
 
+    private val prefs = context.getSharedPreferences("field_tracker_assignment_state", Context.MODE_PRIVATE)
+
     private val _uiState = MutableStateFlow(AssignmentUiState())
     val uiState: StateFlow<AssignmentUiState> = _uiState.asStateFlow()
 
@@ -50,17 +69,89 @@ class AssignmentViewModel @Inject constructor(
         loadAssignment()
     }
 
-    fun refreshPermissionState() {
-        _uiState.value = _uiState.value.copy(hasPreciseLocationPermission = LocationPermissions.hasPreciseLocation(context))
+    fun refreshPermissionState(isPermanentlyDenied: Boolean = false) {
+        val status = LocationPermissions.checkSetupStatus(context, isPermanentlyDenied)
+        _uiState.value = _uiState.value.copy(
+            setupStatus = status,
+            hasPreciseLocationPermission = status.hasFineLocation,
+        )
     }
 
     fun loadAssignment() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
             when (val result = assignmentRepository.getActiveAssignment()) {
-                is ApiResult.Success -> _uiState.value = _uiState.value.copy(isLoading = false, assignment = result.data)
+                is ApiResult.Success -> {
+                    val assignment = result.data
+                    val gpid = assignment?.idol?.gpid
+                    val isRecorded = if (gpid != null) prefs.getBoolean("reached_site_recorded_$gpid", false) else false
+                    val timestamp = if (gpid != null) prefs.getString("reached_site_timestamp_$gpid", null) else null
+                    val coords = if (gpid != null) prefs.getString("reached_site_coords_$gpid", null) else null
+
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        assignment = assignment,
+                        reachedSiteRecorded = isRecorded,
+                        reachedSiteTimestamp = timestamp,
+                        reachedSiteCoordinates = coords,
+                    )
+                }
                 is ApiResult.Error -> _uiState.value = _uiState.value.copy(isLoading = false)
             }
+        }
+    }
+
+    /**
+     * Records site arrival by the assigned officer.
+     * Guaranteed never to crash: checks runtime permissions before querying location,
+     * gracefully handles GPS failure without fabricating coordinates, and persists state idempotently.
+     */
+    fun markReachedSite() {
+        val assignment = _uiState.value.assignment ?: return
+        val gpid = assignment.idol.gpid
+
+        if (_uiState.value.reachedSiteRecorded) {
+            Timber.i("markReachedSite: already recorded for GPID %s", gpid)
+            return
+        }
+
+        val status = LocationPermissions.checkSetupStatus(context)
+        if (!status.isForegroundLocationGranted) {
+            _uiState.value = _uiState.value.copy(
+                reachedSiteError = "Location permission is required to record site arrival. Please grant permission above."
+            )
+            refreshPermissionState()
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isRecordingReachedSite = true, reachedSiteError = null)
+            val fix = locationClient.getCurrentLocation()
+            val timeFormat = SimpleDateFormat("hh:mm:ss a", Locale.getDefault())
+            val formattedTime = timeFormat.format(Date())
+            val formattedCoords = if (fix != null) {
+                String.format(Locale.US, "%.5f, %.5f", fix.latitude, fix.longitude)
+            } else {
+                null
+            }
+
+            prefs.edit()
+                .putBoolean("reached_site_recorded_$gpid", true)
+                .putString("reached_site_timestamp_$gpid", formattedTime)
+                .apply {
+                    if (formattedCoords != null) {
+                        putString("reached_site_coords_$gpid", formattedCoords)
+                    }
+                }
+                .apply()
+
+            _uiState.value = _uiState.value.copy(
+                isRecordingReachedSite = false,
+                reachedSiteRecorded = true,
+                reachedSiteTimestamp = formattedTime,
+                reachedSiteCoordinates = formattedCoords,
+                reachedSiteError = null,
+            )
         }
     }
 
@@ -84,26 +175,13 @@ class AssignmentViewModel @Inject constructor(
     }
 
     /**
-     * The client-side [ValidateProcessionStartUseCase] check ([readiness] being
-     * [ValidateProcessionStartUseCase.Result.Ready]) only verifies an active
-     * assignment and a fresh, sufficiently-accurate GPS fix — per the
-     * 2026-09-23 product decision, this app no longer requires (or checks) any
-     * proximity between the officer and the idol's registered origin.
-     *
-     * The confirmed, real authority for "start procession" is
-     * `POST /tracking/start/` (`TrackingRepository.startSession` —
-     * `apps/tracking/views.py::StartTrackingView`, see docs/API_CONTRACT.md).
-     * This app does not predict or replicate whatever business rule the
-     * backend currently enforces there — it submits the fresh GPS fix and
-     * reacts to the response. A backend rejection is surfaced to the officer
-     * as [AssignmentUiState.startError] with the backend's own business-rule
-     * message (never silently treated as success); nothing is started locally
-     * — no session, no local event, no foreground tracking — until the backend
-     * accepts.
+     * Start Procession gate. Submits fresh GPS fix and starts the foreground tracking session
+     * once accepted by the backend.
      */
     fun startProcession() {
+        if (_uiState.value.isStarting) return
         val assignment = _uiState.value.assignment ?: return
-        val readiness = _uiState.value.readiness as? ValidateProcessionStartUseCase.Result.Ready ?: return
+        if (_uiState.value.readiness !is ValidateProcessionStartUseCase.Result.Ready) return
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isStarting = true, startError = null)
@@ -124,9 +202,6 @@ class AssignmentViewModel @Inject constructor(
             )
             when (sessionResult) {
                 is ApiResult.Success -> {
-                    // The real gate already confirmed this server-side — record it
-                    // locally (no extra network call) so this app's own 9-state
-                    // timeline UI advances past PROCESSION_STARTED.
                     processionRepository.recordLocalStart(
                         gpid = assignment.idol.gpid,
                         assignmentId = assignment.assignmentId,
@@ -139,8 +214,6 @@ class AssignmentViewModel @Inject constructor(
                     )
                 }
                 is ApiResult.Error -> {
-                    // Surface the backend's actual rejection message, whatever it is —
-                    // never converted into success, never re-worded to guess a reason.
                     _uiState.value = _uiState.value.copy(isStarting = false, startError = sessionResult.error.message)
                 }
             }

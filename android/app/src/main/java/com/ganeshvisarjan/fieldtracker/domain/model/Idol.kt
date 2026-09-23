@@ -28,6 +28,7 @@ data class Idol(
     val isOperationalEligible: Boolean,
     val originAddress: String?,
     val originZone: String?,
+    val policeStation: String? = null,
     val originLocation: GeoPoint?,
     val startGateEligible: Boolean,
     val destinationAddress: String?,

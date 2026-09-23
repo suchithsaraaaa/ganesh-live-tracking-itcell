@@ -1,0 +1,96 @@
+Application:
+TG Police Visarjan Tracker
+
+Version:
+1.1.0
+
+Version Code:
+2
+
+Application ID:
+com.ganeshvisarjan.fieldtracker
+
+Build Type:
+Production Release (prodRelease — flavor: prod, build type: release)
+
+Min SDK:
+26
+
+Target SDK:
+34
+
+Compile SDK:
+34
+
+Signed:
+YES
+
+Signing schemes verified (apksigner --verbose):
+  v1 (JAR signing): false
+  v2 (APK Signature Scheme v2): true
+  v3 (APK Signature Scheme v3): true
+Number of signers: 1
+(v1 absence is expected/non-issue: minSdk 26 devices never fall back to it;
+v2/v3 are the schemes that matter here and both verified.)
+
+Debuggable:
+NO
+
+R8/minify:
+Enabled (isMinifyEnabled = true, isShrinkResources = true)
+
+Lint (lintVitalProdRelease):
+PASSED (part of the assembleProdRelease task graph)
+
+Signature Verification:
+PASSED (apksigner verify --verbose)
+
+APK Installation:
+NOT AVAILABLE — no physical Android handset or emulator attached in this
+environment (no ADB device). Not simulated, not claimed as tested.
+
+Backend:
+http://15.206.58.226/
+
+Git base commit:
+15ade8ada851a7e3a2ad1412b7d080ef8fe1cd10
+(feat(assignments): redesign officer assignment workflow and add excel export)
+
+NOTE: this build includes uncommitted local changes on top of that commit —
+the Android-side lifecycle update described in RELEASE_NOTES.md (REACHED_SITE
+milestone, assignment field additions, invalid-assignment handling, launcher
+icon / splash / login hero artwork, core-splashscreen dependency). Nothing in
+backend/ or frontend/ was touched. This session did not commit these Android
+changes to git — see the final report for what changed, file by file.
+
+Build Date:
+2026-09-23 22:12:11 IST
+
+Build environment:
+JDK 22.0.2 (Oracle), Gradle 8.9, AGP 8.5.2, Android SDK build-tools 34.0.0
+(discovered locally at D:/Final_year_project/.android-sdk — not bundled with
+this session; a prior process on this same machine used it to produce the
+v1.0.0 release, and this session reused it for a real build rather than
+claiming one without evidence).
+
+APK SHA-256:
+7a69013484e4704d4c1593bf39a6c44b3ff3e624924ed995ff4ed7bf6149f328
+
+APK size:
+2,153,099 bytes (~2.05 MiB)
+
+Unit tests:
+501 tests, 0 failures, 0 errors (./gradlew :app:testMockDebugUnitTest, run twice,
+identical result both times)
+
+Instrumented test sources (Compose UI + Room DAO):
+Compiled successfully (./gradlew :app:compileProdDebugAndroidTestKotlin) after
+fixing 3 real, previously-undetected bugs surfaced only by this actual
+compile: androidTestImplementation was missing Truth and androidx.test:rules
+(GrantPermissionRule) entirely; a MockK stub in TrackingScreenTest.kt had a
+parameter-name collision shadowing NetworkMonitor.state; and
+AssignmentScreenTest.kt imported assertExists/assertDoesNotExist/onAllNodes
+as top-level functions when they are actually members of
+SemanticsNodeInteraction/ComposeTestRule in this Compose BOM version. None of
+these were fixable without a real compiler — no device was available to
+actually RUN these instrumented tests, only to compile them.

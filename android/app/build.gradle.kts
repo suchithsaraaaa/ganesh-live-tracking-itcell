@@ -16,8 +16,8 @@ android {
         applicationId = "com.ganeshvisarjan.fieldtracker"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 5
+        versionName = "1.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -205,9 +205,11 @@ dependencies {
     testImplementation(libs.androidx.arch.core.testing)
 
     androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.mockk.android)
+    androidTestImplementation(libs.truth)
     androidTestImplementation(libs.androidx.work.testing)
 }

@@ -199,12 +199,62 @@ class Assignment(models.Model):
         return new_assignment
 
     @transaction.atomic
-    def end_assignment(self, actor=None, reason=''):
+    def end_assignment(self, actor=None, reason='', terminate_tracking=True):
         """
         Safely ends an active assignment without deleting historical records.
         Preserves officer snapshot and logs operational & audit events.
+        If terminate_tracking is True, any active TrackingSession is atomically
+        terminated as ADMIN_TERMINATED, and administrative termination events are logged.
         """
         now = timezone.now()
+        active_sessions = []
+        if terminate_tracking:
+            from apps.tracking.models import TrackingSession, TrackingSessionStatus, IdolEvent, IdolEventType
+            from apps.idols.models import ProcessionState
+
+            active_sessions = list(TrackingSession.objects.filter(
+                assignment=self,
+                status__in=[TrackingSessionStatus.ACTIVE, TrackingSessionStatus.STARTED]
+            ).select_for_update())
+
+            for session in active_sessions:
+                session.status = TrackingSessionStatus.ADMIN_TERMINATED
+                session.ended_at = now
+                session.save(update_fields=['status', 'ended_at', 'updated_at'])
+
+                latest_pt = session.location_points.order_by('-recorded_at').first()
+                last_lat = latest_pt.latitude if latest_pt else None
+                last_lon = latest_pt.longitude if latest_pt else None
+
+                IdolEvent.objects.create(
+                    idol=self.idol,
+                    gpid=self.idol.gpid,
+                    event_type=IdolEventType.PROCESSION_ADMIN_TERMINATED,
+                    timestamp=now,
+                    latitude=last_lat,
+                    longitude=last_lon,
+                    zone=self.idol.zone,
+                    actor=actor,
+                    tracking_session=session,
+                    metadata={
+                        'assignment_id': self.id,
+                        'tracking_session_id': session.id,
+                        'gpid': self.idol.gpid,
+                        'constable': self._constable_display(),
+                        'police_id': self.police_id_snapshot,
+                        'admin_actor': actor.username if actor else 'System Admin',
+                        'timestamp': now.isoformat(),
+                        'reason': reason or 'Administratively terminated',
+                        'administrative_termination': True,
+                        'last_latitude': last_lat,
+                        'last_longitude': last_lon,
+                    }
+                )
+
+            if active_sessions and self.idol.procession_state in [ProcessionState.TRACKING, ProcessionState.MOVING, ProcessionState.HOLDING]:
+                self.idol.procession_state = ProcessionState.NOT_STARTED
+                self.idol.save(update_fields=['procession_state', 'updated_at'])
+
         self.is_active = False
         self.ended_at = now
         if reason:
@@ -213,10 +263,11 @@ class Assignment(models.Model):
 
         try:
             from apps.tracking.models import IdolEvent, IdolEventType
+            has_admin_terminated = bool(active_sessions)
             IdolEvent.objects.create(
                 idol=self.idol,
                 gpid=self.idol.gpid,
-                event_type=IdolEventType.ASSIGNMENT_ENDED,
+                event_type=IdolEventType.ASSIGNMENT_FORCE_ENDED if has_admin_terminated else IdolEventType.ASSIGNMENT_ENDED,
                 timestamp=now,
                 zone=self.idol.zone,
                 actor=actor,
@@ -225,7 +276,8 @@ class Assignment(models.Model):
                     'constable': self._constable_display(),
                     'police_id': self.police_id_snapshot,
                     'ended_by': actor.username if actor else 'System',
-                    'reason': reason or 'Assignment ended'
+                    'reason': reason or ('Assignment force-ended by admin' if has_admin_terminated else 'Assignment ended'),
+                    'administrative_termination': has_admin_terminated,
                 }
             )
         except Exception:
@@ -233,8 +285,9 @@ class Assignment(models.Model):
 
         try:
             from apps.audit.models import AuditEvent
+            has_admin_terminated = bool(active_sessions)
             AuditEvent.objects.create(
-                action='ASSIGNMENT_ENDED',
+                action='ASSIGNMENT_FORCE_ENDED' if has_admin_terminated else 'ASSIGNMENT_ENDED',
                 actor=actor,
                 target_id=str(self.id),
                 target_model='Assignment',
@@ -244,7 +297,8 @@ class Assignment(models.Model):
                     'constable': self._constable_display(),
                     'police_id': self.police_id_snapshot,
                     'ended_by': actor.username if actor else 'System',
-                    'reason': reason
+                    'reason': reason,
+                    'tracking_terminated': has_admin_terminated,
                 }
             )
         except Exception:

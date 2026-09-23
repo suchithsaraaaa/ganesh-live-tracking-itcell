@@ -23,6 +23,7 @@ secrets/
 credentials/
 *.secret
 idols.json
+nul
 
 
 # AWS credentials & configuration

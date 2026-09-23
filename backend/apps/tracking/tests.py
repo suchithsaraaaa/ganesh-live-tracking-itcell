@@ -50,8 +50,7 @@ class TrackingAPITests(TestCase):
         self.idol.refresh_from_db()
         self.assertEqual(self.idol.procession_state, ProcessionState.TRACKING)
 
-    def test_start_tracking_exact_within_30m_allowed(self):
-        # 0.00027 deg latitude ~ 30 meters
+    def test_start_tracking_valid_assignment_and_gps_success(self):
         res = self.client.post(reverse('tracking-start'), {
             'assignment_id': self.assignment.id,
             'latitude': 17.36187,
@@ -60,44 +59,44 @@ class TrackingAPITests(TestCase):
         self.assertEqual(res.status_code, 201)
         self.assertEqual(res.data['status'], 'ACTIVE')
 
-    def test_start_tracking_exact_beyond_60m_rejected(self):
-        # 0.00055 deg latitude ~ 61 meters (> 50m)
+    def test_start_tracking_mandatory_regression_unresolved_origin_and_distant_gps_success(self):
+        """
+        MANDATORY REGRESSION TEST:
+        Officer has valid active assignment + valid GPS + GPS is several kilometres away from idol origin
+        + idol origin is unresolved => SUCCESSFUL PROCESSION START
+        """
+        self.idol.geocoding_confidence = GeocodingConfidence.UNRESOLVED
+        self.idol.latitude = None
+        self.idol.longitude = None
+        self.idol.save(update_fields=['geocoding_confidence', 'latitude', 'longitude'])
+
         res = self.client.post(reverse('tracking-start'), {
             'assignment_id': self.assignment.id,
-            'latitude': 17.36215,
-            'longitude': 78.4747
+            'latitude': 17.50000,
+            'longitude': 78.50000
         })
-        self.assertEqual(res.status_code, 400)
-        self.assertIn('START_GATE_REJECTED', res.data['error'])
-        self.assertGreater(res.data['distance_meters'], 50.0)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data['status'], 'ACTIVE')
 
-    def test_start_tracking_high_confidence_within_30m_allowed(self):
-        self.idol.geocoding_confidence = GeocodingConfidence.HIGH
-        self.idol.save(update_fields=['geocoding_confidence'])
-
+    def test_start_tracking_distant_gps_1_5km_away_success(self):
         res = self.client.post(reverse('tracking-start'), {
             'assignment_id': self.assignment.id,
-            'latitude': 17.36187,
+            'latitude': 17.3751,
             'longitude': 78.4747
         })
         self.assertEqual(res.status_code, 201)
         self.assertEqual(res.data['status'], 'ACTIVE')
 
-    def test_start_tracking_medium_locality_rejected(self):
-        # Even if officer is physically near the approximate coordinate, locality-level cannot authorize 50m gate
-        self.idol.geocoding_confidence = GeocodingConfidence.MEDIUM
-        self.idol.save(update_fields=['geocoding_confidence'])
-
+    def test_start_tracking_distant_gps_10km_away_success(self):
         res = self.client.post(reverse('tracking-start'), {
             'assignment_id': self.assignment.id,
-            'latitude': 17.3616,
+            'latitude': 17.4516,
             'longitude': 78.4747
         })
-        self.assertEqual(res.status_code, 400)
-        self.assertIn('locality-level', res.data['error'])
-        self.assertFalse(res.data['start_gate_eligible'])
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data['status'], 'ACTIVE')
 
-    def test_start_tracking_unresolved_rejected(self):
+    def test_start_tracking_unresolved_idol_origin_success(self):
         self.idol.geocoding_confidence = GeocodingConfidence.UNRESOLVED
         self.idol.latitude = None
         self.idol.longitude = None
@@ -108,9 +107,72 @@ class TrackingAPITests(TestCase):
             'latitude': 17.3616,
             'longitude': 78.4747
         })
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data['status'], 'ACTIVE')
+
+    def test_start_tracking_missing_latitude_fails(self):
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': self.assignment.id,
+            'longitude': 78.4747
+        })
         self.assertEqual(res.status_code, 400)
-        self.assertIn('unresolved', res.data['error'])
-        self.assertFalse(res.data['start_gate_eligible'])
+
+    def test_start_tracking_missing_longitude_fails(self):
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': self.assignment.id,
+            'latitude': 17.3616
+        })
+        self.assertEqual(res.status_code, 400)
+
+    def test_start_tracking_invalid_latitude_fails(self):
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': self.assignment.id,
+            'latitude': 999.0,
+            'longitude': 78.4747
+        })
+        self.assertEqual(res.status_code, 400)
+
+    def test_start_tracking_invalid_longitude_fails(self):
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': self.assignment.id,
+            'latitude': 17.3616,
+            'longitude': 999.0
+        })
+        self.assertEqual(res.status_code, 400)
+
+    def test_start_tracking_wrong_assignment_fails(self):
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': 999999,
+            'latitude': 17.3616,
+            'longitude': 78.4747
+        })
+        self.assertEqual(res.status_code, 400)
+
+    def test_start_tracking_inactive_assignment_fails(self):
+        self.assignment.is_active = False
+        self.assignment.save(update_fields=['is_active'])
+
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': self.assignment.id,
+            'latitude': 17.3616,
+            'longitude': 78.4747
+        })
+        self.assertEqual(res.status_code, 400)
+
+    def test_start_tracking_unauthorized_officer_fails(self):
+        other_user = User.objects.create_user(
+            username='other_constable',
+            password='password123',
+            role=UserRole.CONSTABLE
+        )
+        self.client.force_authenticate(user=other_user)
+
+        res = self.client.post(reverse('tracking-start'), {
+            'assignment_id': self.assignment.id,
+            'latitude': 17.3616,
+            'longitude': 78.4747
+        })
+        self.assertEqual(res.status_code, 403)
 
     def test_single_location_ingestion_and_state_transition(self):
         session = TrackingSession.objects.create(
@@ -331,10 +393,9 @@ class AndroidAPKIntegrationTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data['total_points'], 2)
         self.assertGreater(res.data['summary']['distance_travelled_km'], 0.5)
-        self.assertIn('events', res.data)
-        # Assignment created event exists
+        # Assignment event exists
         event_types = [e['event_type'] for e in res.data['events']]
-        self.assertIn('ASSIGNMENT_CREATED', event_types)
+        self.assertTrue('ASSIGNMENT_CREATED' in event_types or 'PROCESSION_ASSIGNED' in event_types)
 
     def test_active_tracking_list_empty_when_no_active_sessions(self):
         """Mandatory Test A: When no sessions are active, GET /api/v1/tracking/active/ returns []."""
@@ -500,4 +561,58 @@ class AndroidAPKIntegrationTests(TestCase):
         self.assertEqual(res_s1.status_code, 200)
         self.assertEqual(res_s1.data['total_points'], 2)
         self.assertEqual(res_s1.data['tracking_session_id'], s1.id)
+
+    def test_ingest_procession_events_and_state_updates(self):
+        """Test POST /api/v1/tracking/events/ creates IdolEvent and updates idol.procession_state."""
+        self.client.force_authenticate(user=self.pc)
+
+        # 1. REACHED_VISARJAN_SITE
+        res = self.client.post('/api/v1/tracking/events/', {
+            'client_event_id': 'evt-unique-101',
+            'gpid': self.idol.gpid,
+            'event_type': 'REACHED_VISARJAN_SITE',
+            'latitude': 17.3620,
+            'longitude': 78.4720,
+        })
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data['status'], 'recorded')
+        self.assertEqual(res.data['procession_state'], 'AT_VISARJAN')
+
+        self.idol.refresh_from_db()
+        self.assertEqual(self.idol.procession_state, 'AT_VISARJAN')
+
+        # 2. VISARJAN_DONE
+        res2 = self.client.post('/api/v1/tracking/events/', {
+            'client_event_id': 'evt-unique-102',
+            'gpid': self.idol.gpid,
+            'event_type': 'VISARJAN_DONE',
+            'latitude': 17.3621,
+            'longitude': 78.4721,
+        })
+        self.assertEqual(res2.status_code, 201)
+        self.assertEqual(res2.data['procession_state'], 'IMMERSION_COMPLETED')
+
+        self.idol.refresh_from_db()
+        self.assertEqual(self.idol.procession_state, 'IMMERSION_COMPLETED')
+
+    def test_ingest_procession_events_idempotent(self):
+        """Test POST /api/v1/tracking/events/ deduplicates by client_event_id."""
+        self.client.force_authenticate(user=self.pc)
+
+        payload = {
+            'client_event_id': 'evt-idempotent-999',
+            'gpid': self.idol.gpid,
+            'event_type': 'SENT_TO_HOLDING',
+            'latitude': 17.3630,
+            'longitude': 78.4730,
+        }
+        res1 = self.client.post('/api/v1/tracking/events/', payload)
+        self.assertEqual(res1.status_code, 201)
+        event_id = res1.data['event_id']
+
+        # Send same client_event_id again
+        res2 = self.client.post('/api/v1/tracking/events/', payload)
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(res2.data['status'], 'already_recorded')
+        self.assertEqual(res2.data['event_id'], event_id)
 

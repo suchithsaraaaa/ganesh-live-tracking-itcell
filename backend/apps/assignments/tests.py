@@ -217,30 +217,40 @@ class EndAssignmentAPITests(TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertIn('already ended', res.data['error'])
 
-    def test_active_tracking_session_blocks_end_assignment(self):
-        from apps.tracking.models import TrackingSession, TrackingSessionStatus
+    def test_active_tracking_session_blocks_non_admin_and_permits_admin_force_end(self):
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus, IdolEventType
+
         session = TrackingSession.objects.create(
             assignment=self.assignment,
             status=TrackingSessionStatus.ACTIVE
         )
 
-        self.client.force_authenticate(user=self.admin)
-        res = self.client.post(f'/api/v1/assignments/{self.assignment.id}/end/', {})
-        self.assertEqual(res.status_code, 400)
-        self.assertTrue(res.data.get('has_active_tracking'))
-        self.assertIn('active tracking session', res.data['error'])
+        # 1. Non-admin (SHO) is blocked from ending an assignment with an active tracking session
+        self.client.force_authenticate(user=self.sho)
+        res_sho = self.client.post(f'/api/v1/assignments/{self.assignment.id}/end/', {})
+        self.assertEqual(res_sho.status_code, 400)
+        self.assertTrue(res_sho.data.get('has_active_tracking'))
+        self.assertIn('Administrative privilege required', res_sho.data['error'])
 
         # Assignment must remain active
         self.assignment.refresh_from_db()
         self.assertTrue(self.assignment.is_active)
 
-        # Once session is stopped, end assignment succeeds
-        session.stop_session()
-        res_ok = self.client.post(f'/api/v1/assignments/{self.assignment.id}/end/', {})
-        self.assertEqual(res_ok.status_code, 200)
+        # 2. Authorized ADMIN can force-end the assignment with active tracking
+        self.client.force_authenticate(user=self.admin)
+        res_admin = self.client.post(f'/api/v1/assignments/{self.assignment.id}/end/', {'reason': 'Admin force wrap-up'})
+        self.assertEqual(res_admin.status_code, 200)
+        self.assertTrue(res_admin.data.get('tracking_terminated'))
 
+        # Assignment becomes inactive
         self.assignment.refresh_from_db()
         self.assertFalse(self.assignment.is_active)
+        self.assertIsNotNone(self.assignment.ended_at)
+
+        # Session becomes ADMIN_TERMINATED
+        session.refresh_from_db()
+        self.assertEqual(session.status, TrackingSessionStatus.ADMIN_TERMINATED)
+        self.assertIsNotNone(session.ended_at)
 
     def test_user_deletion_workflow_end_to_end(self):
         self.client.force_authenticate(user=self.admin)
@@ -738,5 +748,216 @@ class OfficerAssignmentRedesignTests(TestCase):
         headers = [ws.cell(row=4, column=col).value for col in range(1, 16)]
         self.assertIn("Visarjan Date", headers)
         self.assertEqual(headers[5], "Visarjan Date")
+
+
+class AdminForceEndAssignmentTests(TestCase):
+    """
+    Exhaustive tests for Admin Force-End Assignment, immediate officer release,
+    atomic state transitions, historical telemetry preservation, and reassignment.
+    """
+    def setUp(self):
+        from rest_framework.test import APIClient
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus, LocationPoint
+
+        self.client = APIClient()
+        self.main_officer = User.objects.create_superuser(
+            username='admin_boss', password='password123',
+            role=UserRole.MAIN_OFFICER, first_name='Police', last_name='Commissioner'
+        )
+        self.sho_chaderghat = User.objects.create_user(
+            username='sho_chaderghat', password='password123',
+            role=UserRole.SHO, police_station='Chaderghat', zone='SOUTH ZONE'
+        )
+        self.sho_charminar = User.objects.create_user(
+            username='sho_other', password='password123',
+            role=UserRole.SHO, police_station='Charminar', zone='SOUTH ZONE'
+        )
+        self.constable = User.objects.create_user(
+            username='android1', password='password123',
+            role=UserRole.CONSTABLE, police_id='TG-CHD-001',
+            first_name='Ground', last_name='Staff',
+            police_station='Chaderghat', zone='SOUTH ZONE'
+        )
+        self.idol_a = Idol.objects.create(
+            gpid='HYDCMRZCHGT1164',
+            name='Chaderghat Idol A',
+            police_station='Chaderghat',
+            zone='SOUTH ZONE',
+            division='CHADERGHAT',
+            idol_height=18.0
+        )
+        self.idol_b = Idol.objects.create(
+            gpid='HYDCMRZCHGT1165',
+            name='Chaderghat Idol B',
+            police_station='Chaderghat',
+            zone='SOUTH ZONE',
+            division='CHADERGHAT',
+            idol_height=22.0
+        )
+
+        # Active assignment for idol A
+        self.assignment_a = Assignment.assign_constable(
+            idol=self.idol_a,
+            constable=self.constable,
+            assigned_by=self.sho_chaderghat
+        )
+
+        # Active tracking session with GPS telemetry breadcrumbs
+        self.session_a = TrackingSession.objects.create(
+            assignment=self.assignment_a,
+            status=TrackingSessionStatus.ACTIVE
+        )
+        now = timezone.now()
+        self.pt1 = LocationPoint.objects.create(
+            session=self.session_a,
+            latitude=17.3850, longitude=78.4867,
+            accuracy=4.5, speed=1.2,
+            recorded_at=now - timedelta(minutes=10)
+        )
+        self.pt2 = LocationPoint.objects.create(
+            session=self.session_a,
+            latitude=17.3870, longitude=78.4880,
+            accuracy=3.8, speed=1.5,
+            recorded_at=now - timedelta(minutes=5)
+        )
+
+    def test_admin_force_ends_active_assignment_successfully(self):
+        """Admin can force-end an assignment even when active tracking session exists."""
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus, IdolEvent, IdolEventType
+        from apps.audit.models import AuditEvent
+
+        self.client.force_authenticate(user=self.main_officer)
+        res = self.client.post(
+            f'/api/v1/assignments/{self.assignment_a.id}/end/',
+            {'reason': 'Emergency reassignment to high-priority mandap'}
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.data.get('tracking_terminated'))
+
+        # 1. Assignment is ended
+        self.assignment_a.refresh_from_db()
+        self.assertFalse(self.assignment_a.is_active)
+        self.assertIsNotNone(self.assignment_a.ended_at)
+        self.assertEqual(self.assignment_a.constable, self.constable)
+        self.assertIn('Emergency reassignment', self.assignment_a.handover_reason)
+
+        # 2. Tracking session is ADMIN_TERMINATED
+        self.session_a.refresh_from_db()
+        self.assertEqual(self.session_a.status, TrackingSessionStatus.ADMIN_TERMINATED)
+        self.assertIsNotNone(self.session_a.ended_at)
+
+        # 3. Historical telemetry is 100% preserved
+        self.assertEqual(self.session_a.location_points.count(), 2)
+
+        # 4. Administrative termination events recorded
+        admin_event = IdolEvent.objects.filter(
+            idol=self.idol_a,
+            event_type=IdolEventType.PROCESSION_ADMIN_TERMINATED
+        ).first()
+        self.assertIsNotNone(admin_event)
+        self.assertEqual(admin_event.actor, self.main_officer)
+        self.assertAlmostEqual(admin_event.latitude, 17.3870, places=4)
+        self.assertTrue(admin_event.metadata.get('administrative_termination'))
+
+        force_ended_event = IdolEvent.objects.filter(
+            idol=self.idol_a,
+            event_type=IdolEventType.ASSIGNMENT_FORCE_ENDED
+        ).first()
+        self.assertIsNotNone(force_ended_event)
+
+        # 5. No fake RETURNED_TO_ORIGIN event created
+        self.assertFalse(
+            IdolEvent.objects.filter(idol=self.idol_a, event_type=IdolEventType.RETURNED_TO_ORIGIN).exists()
+        )
+
+    def test_officer_immediately_freed_and_available_for_reassignment(self):
+        """Once force-ended, the officer is immediately available for reassignment to GPID B."""
+        from apps.tracking.models import TrackingSessionStatus
+
+        # Admin force-ends assignment A
+        self.client.force_authenticate(user=self.main_officer)
+        res_end = self.client.post(
+            f'/api/v1/assignments/{self.assignment_a.id}/end/',
+            {'reason': 'Shift completed'}
+        )
+        self.assertEqual(res_end.status_code, 200)
+
+        # Check eligible officers for GPID B
+        res_eligible = self.client.get(
+            f'/api/v1/assignments/registry/{self.idol_b.gpid}/eligible-officers/'
+        )
+        self.assertEqual(res_eligible.status_code, 200)
+        officer_ids = [o['id'] for o in res_eligible.data['officers']]
+        self.assertIn(self.constable.id, officer_ids)
+
+        # Check general assignable officers directory with available_only=true
+        res_dir = self.client.get('/api/v1/auth/officers/?available_only=true&police_station=Chaderghat')
+        self.assertEqual(res_dir.status_code, 200)
+        dir_ids = [o['id'] for o in res_dir.data['results']]
+        self.assertIn(self.constable.id, dir_ids)
+
+        # Reassign to GPID B
+        res_assign = self.client.post('/api/v1/assignments/create/', {
+            'gpid': self.idol_b.gpid,
+            'constable_id': self.constable.id
+        })
+        self.assertEqual(res_assign.status_code, 201)
+
+        # Constable is now active on GPID B
+        self.assertTrue(
+            Assignment.objects.filter(idol=self.idol_b, constable=self.constable, is_active=True).exists()
+        )
+
+        # Constable is no longer in available list
+        res_dir_after = self.client.get('/api/v1/auth/officers/?available_only=true&police_station=Chaderghat')
+        dir_ids_after = [o['id'] for o in res_dir_after.data['results']]
+        self.assertNotIn(self.constable.id, dir_ids_after)
+
+    def test_non_admin_cannot_force_end_active_tracking_session(self):
+        """Station Officer is blocked from ending assignment when active tracking session exists."""
+        self.client.force_authenticate(user=self.sho_chaderghat)
+        res = self.client.post(f'/api/v1/assignments/{self.assignment_a.id}/end/', {})
+        self.assertEqual(res.status_code, 400)
+        self.assertTrue(res.data.get('has_active_tracking'))
+        self.assertIn('Administrative privilege required', res.data['error'])
+
+        # Assignment remains active
+        self.assignment_a.refresh_from_db()
+        self.assertTrue(self.assignment_a.is_active)
+
+    def test_unauthorized_constable_receives_403(self):
+        """Field constable cannot end their own assignment via EndAssignmentView."""
+        self.client.force_authenticate(user=self.constable)
+        res = self.client.post(f'/api/v1/assignments/{self.assignment_a.id}/end/', {})
+        self.assertEqual(res.status_code, 403)
+
+    def test_repeated_force_end_is_idempotent(self):
+        """Second call to end an already ended assignment returns 400 without crashing."""
+        self.client.force_authenticate(user=self.main_officer)
+        res1 = self.client.post(f'/api/v1/assignments/{self.assignment_a.id}/end/', {})
+        self.assertEqual(res1.status_code, 200)
+
+        res2 = self.client.post(f'/api/v1/assignments/{self.assignment_a.id}/end/', {})
+        self.assertEqual(res2.status_code, 400)
+        self.assertIn('already ended', res2.data['error'])
+
+    def test_terminated_session_excluded_from_active_tracking_map(self):
+        """Once administratively terminated, session is excluded from active live tracking queries."""
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus
+
+        self.client.force_authenticate(user=self.main_officer)
+        # Verify initially present
+        active_before = TrackingSession.objects.filter(status=TrackingSessionStatus.ACTIVE)
+        self.assertIn(self.session_a, active_before)
+
+        # Force-end
+        self.client.post(f'/api/v1/assignments/{self.assignment_a.id}/end/', {})
+
+        # Verify no longer in active query
+        active_after = TrackingSession.objects.filter(status=TrackingSessionStatus.ACTIVE)
+        self.assertNotIn(self.session_a, active_after)
+
+        # But present in all sessions
+        self.assertTrue(TrackingSession.objects.filter(id=self.session_a.id).exists())
 
 

@@ -12,6 +12,7 @@ class TrackingSessionStatus(models.TextChoices):
     STARTED = 'STARTED', 'Started'
     ACTIVE = 'ACTIVE', 'Active'
     STOPPED = 'STOPPED', 'Stopped'
+    ADMIN_TERMINATED = 'ADMIN_TERMINATED', 'Admin Terminated'
 
 
 class TrackingSession(models.Model):
@@ -60,6 +61,11 @@ class TrackingSession(models.Model):
 
     def stop_session(self):
         self.status = TrackingSessionStatus.STOPPED
+        self.ended_at = timezone.now()
+        self.save(update_fields=['status', 'ended_at', 'updated_at'])
+
+    def terminate_session(self, terminal_status=TrackingSessionStatus.ADMIN_TERMINATED):
+        self.status = terminal_status
         self.ended_at = timezone.now()
         self.save(update_fields=['status', 'ended_at', 'updated_at'])
 
@@ -116,16 +122,22 @@ class LocationPoint(models.Model):
 
 
 class IdolEventType(models.TextChoices):
+    REACHED_SITE = 'REACHED_SITE', 'Reached Site'
     TRACKING_STARTED = 'TRACKING_STARTED', 'Tracking Started'
     TRACKING_STOPPED = 'TRACKING_STOPPED', 'Tracking Stopped'
     ASSIGNMENT_CREATED = 'ASSIGNMENT_CREATED', 'Assignment Created'
     ASSIGNMENT_HANDOVER = 'ASSIGNMENT_HANDOVER', 'Assignment Handover'
     ASSIGNMENT_ENDED = 'ASSIGNMENT_ENDED', 'Assignment Ended'
+    ASSIGNMENT_FORCE_ENDED = 'ASSIGNMENT_FORCE_ENDED', 'Assignment Force Ended'
+    PROCESSION_ADMIN_TERMINATED = 'PROCESSION_ADMIN_TERMINATED', 'Procession Admin Terminated'
     ZONE_ENTERED = 'ZONE_ENTERED', 'Zone Entered'
     HOLDING_POINT_ENTERED = 'HOLDING_POINT_ENTERED', 'Holding Point Entered'
     HOLDING_POINT_EXITED = 'HOLDING_POINT_EXITED', 'Holding Point Exited'
     VISARJAN_REACHED = 'VISARJAN_REACHED', 'Visarjan Site Reached'
     IMMERSION_COMPLETED = 'IMMERSION_COMPLETED', 'Immersion Completed'
+    VISARJAN_NOT_DONE = 'VISARJAN_NOT_DONE', 'Visarjan Not Done'
+    SENT_TO_HOLDING = 'SENT_TO_HOLDING', 'Sent to Holding'
+    RETURNED_TO_ORIGIN = 'RETURNED_TO_ORIGIN', 'Returned to Origin'
     REPORT_GENERATED = 'REPORT_GENERATED', 'Report Generated'
 
 

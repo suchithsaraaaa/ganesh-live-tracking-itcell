@@ -9,12 +9,14 @@ from .views import (
     SessionJourneyView,
     ActiveTrackingListView,
     LatestLocationView,
+    ProcessionEventIngestView,
 )
 
 urlpatterns = [
     path('active/', ActiveTrackingListView.as_view(), name='tracking-active'),
     path('sessions/<int:session_id>/journey/', SessionJourneyView.as_view(), name='tracking-session-journey'),
     path('start/', StartTrackingView.as_view(), name='tracking-start'),
+    path('events/', ProcessionEventIngestView.as_view(), name='tracking-events'),
     path('location/', IngestLocationView.as_view(), name='tracking-location'),
     path('location/batch/', BatchIngestLocationView.as_view(), name='tracking-location-batch'),
     path('stop/', StopTrackingView.as_view(), name='tracking-stop'),

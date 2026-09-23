@@ -19,6 +19,7 @@ from .serializers import (
     LocationPointSerializer,
     IngestLocationSerializer,
     BatchIngestLocationSerializer,
+    ProcessionEventSerializer,
 )
 from apps.accounts.models import User
 from apps.idols.models import Idol, ProcessionState, GeocodingConfidence
@@ -95,50 +96,8 @@ class StartTrackingView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        idol = assignment.idol
-        conf = idol.geocoding_confidence
-
-        # Geocoding confidence 50-meter Start Gate enforcement
-        if conf == GeocodingConfidence.UNRESOLVED or not idol.latitude or not idol.longitude:
-            return Response(
-                {
-                    'error': 'START_GATE_REJECTED: Idol origin coordinate is unresolved. Field officer verification required before procession can be started.',
-                    'geocoding_confidence': conf,
-                    'start_gate_eligible': False
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        if conf == GeocodingConfidence.MEDIUM:
-            return Response(
-                {
-                    'error': 'START_GATE_REJECTED: Idol location is approximate (locality-level). 50-meter pandal geofence cannot be verified. Authoritative EXACT/HIGH coordinate required.',
-                    'geocoding_confidence': conf,
-                    'start_gate_eligible': False
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # EXACT and HIGH coordinates require officer to be within 50 meters
-        officer_lat = serializer.validated_data.get('latitude')
-        officer_lon = serializer.validated_data.get('longitude')
-
-        if officer_lat is not None and officer_lon is not None:
-            dist_m = haversine_distance_meters(
-                float(officer_lat), float(officer_lon),
-                float(idol.latitude), float(idol.longitude)
-            )
-            if dist_m > 50.0:
-                return Response(
-                    {
-                        'error': f'START_GATE_REJECTED: Officer is {dist_m:.1f}m away from authoritative idol origin (maximum allowed: 50.0m).',
-                        'distance_meters': round(dist_m, 1),
-                        'max_allowed_meters': 50.0,
-                        'geocoding_confidence': conf,
-                        'start_gate_eligible': True
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        officer_lat = serializer.validated_data['latitude']
+        officer_lon = serializer.validated_data['longitude']
 
         with transaction.atomic():
             now = timezone.now()
@@ -996,3 +955,105 @@ class MobileLocationView(APIView):
                 idol.save(update_fields=['procession_state', 'updated_at'])
 
         return Response({'success': True})
+
+
+class ProcessionEventIngestView(APIView):
+    """
+    Ingests operational procession lifecycle events from ground staff devices
+    (e.g., REACHED_SITE, PROCESSION_STARTED, REACHED_VISARJAN_SITE, VISARJAN_DONE,
+    VISARJAN_NOT_DONE, SENT_TO_HOLDING, RETURNED_TO_ORIGIN).
+    Deduplicates idempotently via client_event_id and updates authoritative Idol state.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = ProcessionEventSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        gpid = data['gpid']
+        client_event_id = data.get('client_event_id')
+        event_type_raw = data['event_type'].upper()
+        lat = data.get('latitude')
+        lon = data.get('longitude')
+        occurred_at = data.get('occurred_at') or timezone.now()
+
+        idol = get_object_or_404(Idol, gpid__iexact=gpid)
+
+        # Idempotency check: if client_event_id was already processed, return existing
+        if client_event_id:
+            existing_event = IdolEvent.objects.filter(
+                idol=idol,
+                metadata__client_event_id=client_event_id
+            ).first()
+            if existing_event:
+                return Response({
+                    'status': 'already_recorded',
+                    'event_id': existing_event.id,
+                    'client_event_id': client_event_id,
+                    'gpid': idol.gpid,
+                    'event_type': existing_event.event_type,
+                    'state': event_type_raw,
+                    'procession_state': idol.procession_state,
+                }, status=status.HTTP_200_OK)
+
+        # Resolve tracking session
+        session = None
+        session_id_str = data.get('tracking_session_id')
+        if session_id_str and session_id_str.isdigit():
+            session = TrackingSession.objects.filter(id=int(session_id_str)).first()
+        if not session:
+            session = TrackingSession.objects.filter(
+                assignment__idol=idol,
+                status=TrackingSessionStatus.ACTIVE
+            ).order_by('-started_at').first()
+
+        # Map event type to IdolEventType and ProcessionState
+        type_mapping = {
+            'REACHED_SITE': (IdolEventType.REACHED_SITE, None),
+            'AT_IDOL': (IdolEventType.REACHED_SITE, None),
+            'PROCESSION_STARTED': (IdolEventType.TRACKING_STARTED, ProcessionState.TRACKING),
+            'REACHED_VISARJAN_SITE': (IdolEventType.VISARJAN_REACHED, ProcessionState.AT_VISARJAN),
+            'REACHED_VISARJAN_AREA': (IdolEventType.VISARJAN_REACHED, ProcessionState.AT_VISARJAN),
+            'VISARJAN_DONE': (IdolEventType.IMMERSION_COMPLETED, ProcessionState.IMMERSION_COMPLETED),
+            'VISARJAN_NOT_DONE': (IdolEventType.VISARJAN_NOT_DONE, ProcessionState.HOLDING),
+            'SENT_TO_HOLDING': (IdolEventType.HOLDING_POINT_ENTERED, ProcessionState.HOLDING),
+            'HOLDING': (IdolEventType.HOLDING_POINT_ENTERED, ProcessionState.HOLDING),
+            'RETURNED_TO_ORIGIN': (IdolEventType.RETURNED_TO_ORIGIN, ProcessionState.NOT_STARTED),
+            'RETURNED_TO_PANDAL': (IdolEventType.RETURNED_TO_ORIGIN, ProcessionState.NOT_STARTED),
+        }
+
+        mapped_type, new_state = type_mapping.get(event_type_raw, (event_type_raw, None))
+
+        with transaction.atomic():
+            if new_state:
+                idol.procession_state = new_state
+                idol.save(update_fields=['procession_state', 'updated_at'])
+
+            event = IdolEvent.objects.create(
+                idol=idol,
+                gpid=idol.gpid,
+                event_type=mapped_type,
+                timestamp=occurred_at,
+                latitude=lat,
+                longitude=lon,
+                zone=idol.zone,
+                actor=request.user if request.user.is_authenticated else None,
+                tracking_session=session,
+                metadata={
+                    'client_event_id': client_event_id,
+                    'raw_event_type': event_type_raw,
+                    'submitted_by': request.user.username if request.user.is_authenticated else 'unknown',
+                    'source': 'Android Field Tracker',
+                }
+            )
+
+        return Response({
+            'status': 'recorded',
+            'event_id': event.id,
+            'client_event_id': client_event_id,
+            'gpid': idol.gpid,
+            'event_type': mapped_type,
+            'state': event_type_raw,
+            'procession_state': idol.procession_state,
+        }, status=status.HTTP_201_CREATED)

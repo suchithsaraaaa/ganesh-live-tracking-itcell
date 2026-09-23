@@ -17,19 +17,25 @@ data class ProcessionStartRequestDto(
 @Serializable
 data class ProcessionEventRequestDto(
     @SerialName("client_event_id") val clientEventId: String,
-    @SerialName("assignment_id") val assignmentId: String,
+    @SerialName("assignment_id") val assignmentId: String = "",
     val gpid: String,
+    @SerialName("tracking_session_id") val trackingSessionId: String? = null,
     @SerialName("event_type") val eventType: String,
-    val latitude: Double,
-    val longitude: Double,
-    @SerialName("occurred_at") val occurredAt: String,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    @SerialName("occurred_at") val occurredAt: String? = null,
 )
 
 /** The backend's authoritative resulting state after a start/event request. */
 @Serializable
 data class ProcessionStateResponseDto(
-    val gpid: String,
-    val state: String,
+    val status: String = "",
+    @SerialName("event_id") val eventId: Long? = null,
+    @SerialName("client_event_id") val clientEventId: String? = null,
+    val gpid: String = "",
+    val state: String = "",
+    @SerialName("event_type") val eventType: String? = null,
+    @SerialName("procession_state") val processionState: String? = null,
     @SerialName("occurred_at") val occurredAt: String? = null,
 )
 

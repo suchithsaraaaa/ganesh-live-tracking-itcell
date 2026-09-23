@@ -16,6 +16,7 @@ import {
   ChevronLeft,
 } from 'lucide-react';
 import { useAssignments } from '../hooks/useAssignments';
+import { useAuth } from '../context/AuthContext';
 import {
   fetchAuthoritativePoliceStations,
   fetchAssignableRegistry,
@@ -39,6 +40,9 @@ import {
 import { LoadingState, EmptyState, ErrorState } from '../components/shared/States';
 
 export const AssignmentsPage: React.FC = () => {
+  const { user } = useAuth();
+  const isAdmin = !!user && (user.role === 'MAIN_OFFICER' || (user as any).is_superuser);
+
   // Navigation View State
   const [activeTab, setActiveTab] = useState<'console' | 'history'>('console');
 
@@ -87,7 +91,9 @@ export const AssignmentsPage: React.FC = () => {
     police_station: string;
     officer_name: string;
     started_at: string;
+    has_active_tracking?: boolean;
   } | null>(null);
+  const [isConfirmingForceEnd, setIsConfirmingForceEnd] = useState<boolean>(false);
   const [endReason, setEndReason] = useState<string>('');
   const [endingSubmitting, setEndingSubmitting] = useState<boolean>(false);
   const [endError, setEndError] = useState<string | null>(null);
@@ -261,10 +267,12 @@ export const AssignmentsPage: React.FC = () => {
     police_station: string;
     officer_name: string;
     started_at: string;
+    has_active_tracking?: boolean;
   }) => {
     setEndingAssignment(item);
     setEndReason('');
     setEndError(null);
+    setIsConfirmingForceEnd(false);
   };
 
   const handleCloseEndModal = () => {
@@ -272,20 +280,36 @@ export const AssignmentsPage: React.FC = () => {
     setEndingAssignment(null);
     setEndReason('');
     setEndError(null);
+    setIsConfirmingForceEnd(false);
   };
 
   // Confirm End Assignment
-  const handleConfirmEndAssignment = async () => {
+  const handleConfirmEndAssignment = async (force: boolean = false) => {
     if (!endingAssignment) return;
+
+    // If active tracking is detected and admin has not confirmed force-end yet, switch to confirmation step
+    if (endingAssignment.has_active_tracking && !isConfirmingForceEnd && !force) {
+      setIsConfirmingForceEnd(true);
+      return;
+    }
+
     setEndingSubmitting(true);
     setEndError(null);
     try {
-      await endAssignment(endingAssignment.id, endReason.trim());
-      setSuccessToast(`Assignment for ${endingAssignment.idol_gpid} ended successfully.`);
+      const res = await endAssignment(
+        endingAssignment.id,
+        endReason.trim(),
+        force || Boolean(endingAssignment.has_active_tracking)
+      );
+      setSuccessToast(
+        res.tracking_terminated
+          ? `Assignment for ${endingAssignment.idol_gpid} force-ended and active tracking terminated. Officer released.`
+          : `Assignment for ${endingAssignment.idol_gpid} ended successfully. Officer released.`
+      );
       setTimeout(() => setSuccessToast(null), 4000);
       handleCloseEndModal();
 
-      // Refresh registry, drawer, and history
+      // Immediately refresh registry, drawer, and history without reload
       await loadRegistry();
       if (drawerGpid === endingAssignment.idol_gpid) {
         handleOpenDrawer(endingAssignment.idol_gpid);
@@ -801,6 +825,9 @@ export const AssignmentsPage: React.FC = () => {
                                         police_station: idol.police_station,
                                         officer_name: idol.assignment!.officer_name,
                                         started_at: idol.assignment!.started_at,
+                                        has_active_tracking:
+                                          idol.tracking_state !== 'OFFLINE' ||
+                                          ['TRACKING', 'MOVING', 'HOLDING'].includes(idol.procession_state),
                                       })
                                     }
                                     className="px-2 py-1 text-[11px] font-medium rounded border border-rose-500/30 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 transition-colors cursor-pointer"
@@ -1372,6 +1399,9 @@ export const AssignmentsPage: React.FC = () => {
                         police_station: drawerDetail.police_station,
                         officer_name: drawerDetail.assignment!.officer_name,
                         started_at: drawerDetail.assignment!.started_at,
+                        has_active_tracking:
+                          drawerDetail.connection_state !== 'OFFLINE' ||
+                          ['TRACKING', 'MOVING', 'HOLDING'].includes(drawerDetail.procession_state),
                       })
                     }
                     className="w-full py-2 rounded bg-rose-600 hover:bg-rose-500 text-white font-semibold transition-colors cursor-pointer text-xs flex items-center justify-center space-x-1.5"
@@ -1589,9 +1619,9 @@ export const AssignmentsPage: React.FC = () => {
             {/* Modal Header */}
             <div className="px-5 py-3.5 bg-base border-b border-border-subtle flex items-center justify-between shrink-0">
               <div className="flex items-center space-x-2">
-                <AlertTriangle className="w-4 h-4 text-rose-400" />
+                <AlertTriangle className={`w-4 h-4 ${isConfirmingForceEnd ? 'text-rose-500' : 'text-amber-400'}`} />
                 <h2 className="text-sm font-bold text-text-primary uppercase tracking-wider">
-                  End Assignment
+                  {isConfirmingForceEnd ? 'Force End Assignment' : 'End Assignment'}
                 </h2>
               </div>
               <button
@@ -1645,31 +1675,65 @@ export const AssignmentsPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Warning Notice */}
-              <div className="p-3 bg-amber-500/10 border border-amber-500/25 rounded flex items-start space-x-2 text-amber-300 text-[11px]">
-                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
-                <span>
-                  Ending this assignment will release the officer and preserve all historical telemetry
-                  and event logs.
-                </span>
-              </div>
+              {/* Explicit Confirmation Dialog if confirming Force End */}
+              {isConfirmingForceEnd ? (
+                <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded space-y-2">
+                  <div className="flex items-center space-x-2 text-rose-400 font-bold text-xs uppercase tracking-wider">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>Force End Assignment?</span>
+                  </div>
+                  <p className="text-rose-200/90 text-[11px] leading-relaxed">
+                    This officer currently has an active procession.
+                    <br /><br />
+                    Ending the assignment will terminate the active tracking session immediately and release the officer.
+                    <br /><br />
+                    Historical GPS telemetry and event logs will be preserved.
+                    <br /><br />
+                    <span className="font-bold text-rose-300">This action cannot be undone.</span>
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Warning Notice: Active Tracking Detected vs Normal */}
+                  {endingAssignment.has_active_tracking ? (
+                    <div className="p-3.5 bg-amber-500/15 border border-amber-500/35 rounded flex items-start space-x-2.5 text-amber-300 text-xs">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+                      <div className="space-y-1">
+                        <span className="font-bold block text-amber-300">Active tracking session detected.</span>
+                        <span className="text-amber-200/90 leading-relaxed block text-[11px]">
+                          {isAdmin
+                            ? 'Ending this assignment will immediately terminate the active tracking session and release the officer. All historical GPS telemetry and event logs will be preserved.'
+                            : 'This officer currently has an active tracking session. Only authorized administrators (Main Officer / Admin) can force-end assignments with active tracking.'}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/25 rounded flex items-start space-x-2 text-amber-300 text-[11px]">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+                      <span>
+                        Ending this assignment will release the officer and preserve all historical telemetry and event logs.
+                      </span>
+                    </div>
+                  )}
 
-              {/* Optional Reason */}
-              <div>
-                <label className="block text-text-secondary font-bold text-[11px] mb-1">
-                  Reason for ending assignment (optional)
-                </label>
-                <input
-                  type="text"
-                  value={endReason}
-                  onChange={(e) => setEndReason(e.target.value)}
-                  disabled={endingSubmitting}
-                  placeholder="e.g. Shift conclusion / Handover rotation / Immersion complete"
-                  className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent"
-                />
-              </div>
+                  {/* Optional Reason */}
+                  <div>
+                    <label className="block text-text-secondary font-bold text-[11px] mb-1">
+                      Reason for ending assignment (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={endReason}
+                      onChange={(e) => setEndReason(e.target.value)}
+                      disabled={endingSubmitting}
+                      placeholder="e.g. Shift conclusion / Handover rotation / Immersion complete"
+                      className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent"
+                    />
+                  </div>
+                </>
+              )}
 
-              {/* Error Display (Active Tracking Safety Block) */}
+              {/* Error Display */}
               {endError && (
                 <div className="p-3 bg-rose-500/15 border border-rose-500/30 rounded flex items-start space-x-2 text-rose-300 text-xs">
                   <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -1681,21 +1745,39 @@ export const AssignmentsPage: React.FC = () => {
               <div className="pt-2 border-t border-border-subtle flex items-center justify-end space-x-3">
                 <button
                   type="button"
-                  onClick={handleCloseEndModal}
+                  onClick={isConfirmingForceEnd ? () => setIsConfirmingForceEnd(false) : handleCloseEndModal}
                   disabled={endingSubmitting}
                   className="px-4 py-2 rounded border border-border-default text-text-secondary hover:text-text-primary hover:bg-elevated-2 transition-colors cursor-pointer text-xs disabled:opacity-50"
                 >
                   Cancel
                 </button>
-                <button
-                  type="button"
-                  onClick={handleConfirmEndAssignment}
-                  disabled={endingSubmitting}
-                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold rounded transition-colors cursor-pointer text-xs flex items-center space-x-1.5 shadow-sm"
-                >
-                  {endingSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{endingSubmitting ? 'Ending…' : 'End Assignment'}</span>
-                </button>
+                {isConfirmingForceEnd ? (
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmEndAssignment(true)}
+                    disabled={endingSubmitting || !isAdmin}
+                    className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold rounded transition-colors cursor-pointer text-xs flex items-center space-x-1.5 shadow-sm"
+                  >
+                    {endingSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    <span>{endingSubmitting ? 'Terminating…' : 'FORCE END ASSIGNMENT'}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmEndAssignment(false)}
+                    disabled={endingSubmitting || (endingAssignment.has_active_tracking && !isAdmin)}
+                    className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold rounded transition-colors cursor-pointer text-xs flex items-center space-x-1.5 shadow-sm"
+                  >
+                    {endingSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    <span>
+                      {endingSubmitting
+                        ? 'Ending…'
+                        : endingAssignment.has_active_tracking
+                        ? 'Force End Assignment'
+                        : 'End Assignment'}
+                    </span>
+                  </button>
+                )}
               </div>
             </div>
           </div>

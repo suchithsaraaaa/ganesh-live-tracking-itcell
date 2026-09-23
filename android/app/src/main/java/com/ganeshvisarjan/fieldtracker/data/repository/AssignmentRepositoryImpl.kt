@@ -14,7 +14,7 @@ import com.ganeshvisarjan.fieldtracker.domain.repository.AssignmentRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private fun IdolDto.toDomain(): Idol = Idol(
+private fun IdolDto.toDomain(fallbackPoliceStation: String? = null): Idol = Idol(
     gpid = gpid,
     ownerName = name ?: associationName ?: gpid,
     associationName = associationName,
@@ -23,6 +23,7 @@ private fun IdolDto.toDomain(): Idol = Idol(
     isOperationalEligible = isOperationalEligible,
     originAddress = address,
     originZone = zone,
+    policeStation = policeStation ?: fallbackPoliceStation,
     originLocation = GeoPoint.ofOrNull(latitude, longitude),
     startGateEligible = startGateEligible,
     destinationAddress = riverName,
@@ -46,7 +47,7 @@ class AssignmentRepositoryImpl @Inject constructor(
      */
     override suspend fun getActiveAssignment(): ApiResult<Assignment?> = safeApiCall {
         val dto = assignmentApi.currentAssignment().activeAssignment ?: return@safeApiCall null
-        val idol = assignmentApi.idolDetail(dto.gpid).toDomain()
+        val idol = assignmentApi.idolDetail(dto.gpid).toDomain(dto.policeStation)
         Assignment(
             assignmentId = dto.assignmentId.toString(),
             officerId = null, // not returned by this endpoint — see Assignment.officerId kdoc

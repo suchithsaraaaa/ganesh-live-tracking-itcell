@@ -3,52 +3,49 @@ package com.ganeshvisarjan.fieldtracker.domain.usecase
 import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionEventType
 import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState
 import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.ASSIGNED
-import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.AT_IDOL
-import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.HOLDING
-import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.MOVING
+import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.REACHED_SITE
 import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.PROCESSION_STARTED
-import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.REACHED_VISARJAN_AREA
-import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.RETURNED_TO_PANDAL
-import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.RETURNING_TO_PANDAL
+import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.REACHED_VISARJAN_SITE
 import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.VISARJAN_DONE
+import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.VISARJAN_NOT_DONE
+import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.SENT_TO_HOLDING
+import com.ganeshvisarjan.fieldtracker.domain.model.ProcessionState.RETURNED_TO_ORIGIN
 
 /**
  * Single source of truth for which [ProcessionEventType] is legal from which
  * [ProcessionState]. Every layer (ViewModel, Repository, Worker) must route
- * through this object instead of re-deriving the rule — see spec section 44.
+ * through this object instead of re-deriving the rule.
  *
- * The backend is the actual authority; this table exists so the Android UI can
- * (a) grey out actions that are obviously illegal before making a network call,
- * and (b) be exhaustively unit-tested (see ProcessionStateMachineTest). A
- * successful backend response is what actually advances [ProcessionState] —
- * this table never advances state on its own.
+ * Implements the required operational lifecycle:
+ * ASSIGNED -> REACHED_SITE -> PROCESSION_STARTED -> REACHED_VISARJAN_SITE ->
+ * (VISARJAN_DONE | VISARJAN_NOT_DONE -> SENT_TO_HOLDING -> RETURNED_TO_ORIGIN)
  */
 object ProcessionStateMachine {
 
     private val transitions: Map<ProcessionState, Map<ProcessionEventType, ProcessionState>> = mapOf(
         ASSIGNED to mapOf(
+            ProcessionEventType.REACHED_SITE to REACHED_SITE,
             ProcessionEventType.PROCESSION_STARTED to PROCESSION_STARTED,
         ),
-        AT_IDOL to mapOf(
+        REACHED_SITE to mapOf(
             ProcessionEventType.PROCESSION_STARTED to PROCESSION_STARTED,
         ),
         PROCESSION_STARTED to mapOf(
-            ProcessionEventType.MOVING to MOVING,
+            ProcessionEventType.REACHED_VISARJAN_SITE to REACHED_VISARJAN_SITE,
         ),
-        MOVING to mapOf(
-            ProcessionEventType.REACHED_VISARJAN_AREA to REACHED_VISARJAN_AREA,
-        ),
-        REACHED_VISARJAN_AREA to mapOf(
+        REACHED_VISARJAN_SITE to mapOf(
             ProcessionEventType.VISARJAN_DONE to VISARJAN_DONE,
-            ProcessionEventType.HOLDING to HOLDING,
+            ProcessionEventType.VISARJAN_NOT_DONE to VISARJAN_NOT_DONE,
         ),
-        HOLDING to mapOf(
-            ProcessionEventType.RETURNING_TO_PANDAL to RETURNING_TO_PANDAL,
+        VISARJAN_NOT_DONE to mapOf(
+            ProcessionEventType.SENT_TO_HOLDING to SENT_TO_HOLDING,
+            ProcessionEventType.VISARJAN_DONE to VISARJAN_DONE,
         ),
-        RETURNING_TO_PANDAL to mapOf(
-            ProcessionEventType.RETURNED_TO_PANDAL to RETURNED_TO_PANDAL,
+        SENT_TO_HOLDING to mapOf(
+            ProcessionEventType.RETURNED_TO_ORIGIN to RETURNED_TO_ORIGIN,
+            ProcessionEventType.REACHED_VISARJAN_SITE to REACHED_VISARJAN_SITE,
         ),
-        RETURNED_TO_PANDAL to emptyMap(),
+        RETURNED_TO_ORIGIN to emptyMap(),
         VISARJAN_DONE to emptyMap(),
     )
 
@@ -67,15 +64,15 @@ object ProcessionStateMachine {
     fun isTerminal(state: ProcessionState): Boolean =
         transitions[state]?.isEmpty() == true
 
-    /** True while GPS telemetry should keep being collected for this state, per spec section 42. */
+    /** True while GPS telemetry should keep being collected for this state. */
     fun shouldContinueGpsTracking(state: ProcessionState): Boolean = when (state) {
-        ASSIGNED, AT_IDOL -> false
-        PROCESSION_STARTED, MOVING, REACHED_VISARJAN_AREA, HOLDING, RETURNING_TO_PANDAL -> true
-        RETURNED_TO_PANDAL, VISARJAN_DONE -> false
+        ASSIGNED, REACHED_SITE -> false
+        PROCESSION_STARTED, REACHED_VISARJAN_SITE, VISARJAN_NOT_DONE, SENT_TO_HOLDING -> true
+        RETURNED_TO_ORIGIN, VISARJAN_DONE -> false
     }
 
     /** Ordered list used to render the timeline UI, independent of which ones actually occurred. */
     val timelineOrder: List<ProcessionState> = listOf(
-        PROCESSION_STARTED, MOVING, REACHED_VISARJAN_AREA, VISARJAN_DONE, HOLDING, RETURNING_TO_PANDAL, RETURNED_TO_PANDAL,
+        REACHED_SITE, PROCESSION_STARTED, REACHED_VISARJAN_SITE, VISARJAN_DONE, VISARJAN_NOT_DONE, SENT_TO_HOLDING, RETURNED_TO_ORIGIN,
     )
 }

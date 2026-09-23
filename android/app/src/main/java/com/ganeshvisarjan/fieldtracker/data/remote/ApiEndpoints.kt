@@ -29,11 +29,9 @@ object ApiEndpoints {
     const val TRACKING_STOP = "tracking/stop/"
     const val TRACKING_LOCATION_BATCH = "tracking/location/batch/"
 
-    // --- CONCEPTUAL / TODO-BACKEND — no apps/processions app exists.
-    // Re-confirmed 2026-09-23: still fictional. The real start-gate action goes
-    // through TRACKING_START above instead — see docs/API_CONTRACT.md
-    // "Procession lifecycle". Kept as named constants (unused by the real start
-    // flow) so this scaffolding is ready if a real procession API is ever built.
-    const val PROCESSION_START = "processions/start/"
-    const val PROCESSION_EVENTS = "processions/events/"
+    // --- CONFIRMED (apps/tracking/urls.py) ---
+    // Confirmed operational procession event lifecycle endpoint
+    const val PROCESSION_START = "tracking/start/"
+    const val PROCESSION_EVENTS = "tracking/events/"
 }
+

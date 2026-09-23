@@ -41,6 +41,30 @@ fun HomeScreen(
     Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
         HomeHeader(state)
 
+        if (state.errorMessage != null) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { viewModel.clearErrorMessage() },
+                title = {
+                    Text(
+                        text = "NOTICE",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    )
+                },
+                text = {
+                    Text(
+                        text = state.errorMessage ?: "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                    )
+                },
+                confirmButton = {
+                    Button(onClick = { viewModel.clearErrorMessage() }) {
+                        Text("OK")
+                    }
+                },
+            )
+        }
+
         androidx.compose.foundation.layout.Spacer(Modifier.height(20.dp))
 
         when {

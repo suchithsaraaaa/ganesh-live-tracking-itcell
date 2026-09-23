@@ -38,6 +38,8 @@ interface TrackingRepository {
     suspend fun requestStopSession(localSessionId: String)
 
     fun observeActiveSession(): Flow<TrackingSession?>
+    suspend fun getActiveSessionOnce(): TrackingSession?
+    suspend fun terminateSessionRemotely(localSessionId: String)
 
     /** Validates and durably persists one GPS fix. Returns false if the fix failed quality checks. */
     suspend fun recordTelemetryPoint(

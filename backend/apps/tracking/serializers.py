@@ -33,8 +33,22 @@ class StartTrackingSerializer(serializers.Serializer):
     assignment_id = serializers.IntegerField(required=False)
     gpid = serializers.CharField(required=False)
     device_info = serializers.CharField(required=False, allow_blank=True, default='')
-    latitude = serializers.DecimalField(max_digits=12, decimal_places=8, required=False, allow_null=True)
-    longitude = serializers.DecimalField(max_digits=12, decimal_places=8, required=False, allow_null=True)
+    latitude = serializers.DecimalField(max_digits=12, decimal_places=8, required=True, allow_null=False)
+    longitude = serializers.DecimalField(max_digits=12, decimal_places=8, required=True, allow_null=False)
+
+    def validate_latitude(self, value):
+        if value is None:
+            raise serializers.ValidationError('Latitude is required.')
+        if value < -90 or value > 90:
+            raise serializers.ValidationError('Latitude must be between -90.0 and 90.0.')
+        return value
+
+    def validate_longitude(self, value):
+        if value is None:
+            raise serializers.ValidationError('Longitude is required.')
+        if value < -180 or value > 180:
+            raise serializers.ValidationError('Longitude must be between -180.0 and 180.0.')
+        return value
 
     def validate(self, data):
         assignment_id = data.get('assignment_id')
@@ -53,6 +67,13 @@ class StartTrackingSerializer(serializers.Serializer):
                 data['assignment_obj'] = Assignment.objects.select_related('idol', 'constable').get(idol__gpid__iexact=gpid, is_active=True)
             except Assignment.DoesNotExist:
                 raise serializers.ValidationError(f'No active assignment found for GPID {gpid}.')
+
+        if assignment_id and gpid:
+            if data['assignment_obj'].idol.gpid.upper() != gpid.upper():
+                raise serializers.ValidationError(f'GPID {gpid} does not match assignment {assignment_id}.')
+
+        if data.get('latitude') is None or data.get('longitude') is None:
+            raise serializers.ValidationError('Valid GPS coordinates (latitude and longitude) are required to start procession tracking.')
 
         return data
 
@@ -90,3 +111,14 @@ class BatchIngestLocationSerializer(serializers.Serializer):
         child=serializers.DictField(),
         allow_empty=False
     )
+
+
+class ProcessionEventSerializer(serializers.Serializer):
+    client_event_id = serializers.CharField(max_length=128, required=False, allow_blank=True, default='')
+    gpid = serializers.CharField(max_length=64, required=True)
+    assignment_id = serializers.CharField(max_length=64, required=False, allow_blank=True, default='')
+    tracking_session_id = serializers.CharField(max_length=64, required=False, allow_blank=True, default='')
+    event_type = serializers.CharField(max_length=50, required=True)
+    latitude = serializers.FloatField(required=False, allow_null=True, default=None)
+    longitude = serializers.FloatField(required=False, allow_null=True, default=None)
+    occurred_at = serializers.DateTimeField(required=False, allow_null=True, default=None)

@@ -91,6 +91,18 @@ class TrackingRepositoryImpl @Inject constructor(
     override fun observeActiveSession(): Flow<TrackingSession?> =
         sessionDao.observeActiveSession().map { it?.toDomain() }
 
+    override suspend fun getActiveSessionOnce(): TrackingSession? =
+        sessionDao.getActiveSessionOnce()?.toDomain()
+
+    override suspend fun terminateSessionRemotely(localSessionId: String) {
+        sessionDao.markStopped(
+            localId = localSessionId,
+            status = TrackingSessionStatus.REMOTELY_TERMINATED.name,
+            stoppedAt = System.currentTimeMillis(),
+        )
+        TrackingLog.sessionStopped("remotely-terminated-$localSessionId")
+    }
+
     override suspend fun recordTelemetryPoint(
         sessionLocalId: String,
         gpid: String,
@@ -101,6 +113,16 @@ class TrackingRepositoryImpl @Inject constructor(
         bearingDegrees: Float?,
         recordedAt: Long,
     ): Boolean {
+        val session = sessionDao.getById(sessionLocalId)
+        if (session == null || session.status in listOf(
+                TrackingSessionStatus.STOPPED.name,
+                TrackingSessionStatus.REMOTELY_TERMINATED.name,
+                TrackingSessionStatus.FAILED.name,
+                TrackingSessionStatus.SYNCED.name,
+            )
+        ) {
+            return false
+        }
         if (!gpsQualityValidator.isAcceptable(location, accuracyMeters)) return false
 
         TrackingLog.gpsFix(accuracyMeters)
