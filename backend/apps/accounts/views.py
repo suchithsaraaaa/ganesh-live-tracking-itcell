@@ -272,7 +272,12 @@ class AssignableOfficerDirectoryView(APIView):
                 qs = qs.filter(division__iexact=caller.division)
             else:
                 qs = qs.none()
-        elif caller.role in [UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN] and not caller.is_superuser:
+        elif caller.role == UserRole.SYS_ADMIN and not caller.is_superuser:
+            if user_zone:
+                qs = qs.filter(zone__iexact=user_zone)
+            else:
+                qs = qs.none()
+        elif caller.role == UserRole.MAIN_OFFICER and not caller.is_superuser:
             if user_zone:
                 qs = qs.filter(zone__iexact=user_zone)
 
@@ -474,9 +479,10 @@ class UserDeleteView(APIView):
 class RoleTemplateListView(APIView):
     """
     List role templates and default capabilities.
-    Accessible to users with CanManageUsers capability (SUPER_ADMIN, MAIN_OFFICER, SYS_ADMIN).
+    Strictly restricted to SUPER_ADMIN.
+    Non-superadmin accounts receive HTTP 403 Forbidden.
     """
-    permission_classes = [CanManageUsers]
+    permission_classes = [IsSuperAdmin]
 
     def get(self, request):
         templates_by_role = {t.role: t for t in RolePermissionTemplate.objects.all()}
@@ -508,12 +514,9 @@ class RoleTemplateListView(APIView):
 class RoleTemplateDetailView(APIView):
     """
     Retrieve or update role default permissions template.
-    Only SUPER_ADMIN may update templates (enforced with IsSuperAdmin permission).
+    Strictly restricted to SUPER_ADMIN for all HTTP methods (GET, PUT, PATCH).
     """
-    def get_permissions(self):
-        if self.request.method in ['PUT', 'PATCH']:
-            return [IsSuperAdmin()]
-        return [CanManageUsers()]
+    permission_classes = [IsSuperAdmin]
 
     def get(self, request, role):
         role_upper = role.upper()

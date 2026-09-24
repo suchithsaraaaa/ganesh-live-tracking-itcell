@@ -15,7 +15,7 @@ import {
   Settings,
   LucideIcon,
 } from 'lucide-react';
-import { useAuth, canManageAssignments, isMainOfficer } from '../../context/AuthContext';
+import { useAuth, canManageAssignments, isMainOfficer, isSuperAdmin } from '../../context/AuthContext';
 import { GaneshaMark } from '../shared/GaneshaMark';
 import telanganaPoliceLogo from '../../assets/branding/telangana-police-logo.png';
 
@@ -50,7 +50,9 @@ export const Sidebar: React.FC = () => {
       enabled: canManageAssignments(user),
     },
     { key: 'users', label: 'Users', icon: Users, to: '/users', enabled: isMainOfficer(user) },
-    { key: 'roles', label: 'Roles & Permissions', icon: KeyRound, to: '/roles', enabled: isMainOfficer(user) },
+    ...(isSuperAdmin(user)
+      ? [{ key: 'roles', label: 'Roles & Permissions', icon: KeyRound, to: '/roles', enabled: true }]
+      : []),
     { key: 'settings', label: 'Settings', icon: Settings, to: '/settings', enabled: true },
   ];
 

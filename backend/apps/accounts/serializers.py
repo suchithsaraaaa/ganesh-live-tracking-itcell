@@ -4,7 +4,8 @@ from .models import User, UserRole, CANONICAL_PERMISSIONS
 
 class UserSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
-    role_display = serializers.CharField(source='get_role_display', read_only=True)
+    role_display = serializers.SerializerMethodField()
+    jurisdiction_display = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
 
     class Meta:
@@ -17,6 +18,7 @@ class UserSerializer(serializers.ModelSerializer):
             'last_name',
             'role',
             'role_display',
+            'jurisdiction_display',
             'police_id',
             'zone',
             'division',
@@ -31,6 +33,28 @@ class UserSerializer(serializers.ModelSerializer):
 
     def get_name(self, obj) -> str:
         return obj.get_full_name() or obj.username
+
+    def get_role_display(self, obj) -> str:
+        if obj.role == UserRole.SYS_ADMIN:
+            return 'Zonal System Admin' if obj.zone else 'System Admin (Unassigned Zone)'
+        if obj.role == UserRole.SUPER_ADMIN:
+            return 'Super Administrator'
+        if obj.role == UserRole.MAIN_OFFICER:
+            return 'Main Officer'
+        return obj.get_role_display()
+
+    def get_jurisdiction_display(self, obj) -> str:
+        if obj.role == UserRole.SUPER_ADMIN:
+            return 'City Wide'
+        if obj.role == UserRole.MAIN_OFFICER:
+            return obj.zone if obj.zone else 'City Wide'
+        if obj.police_station:
+            return obj.police_station
+        if obj.zone:
+            return obj.zone
+        if obj.division:
+            return obj.division
+        return 'Unassigned'
 
     def get_permissions(self, obj) -> list[str]:
         return obj.get_effective_permissions()
@@ -169,24 +193,53 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
             if active_super_count < 1:
                 errors['is_active'] = ['Cannot disable the last active Super Administrator. At least one active Super Admin must exist.']
 
-        # Self-modification guard for caller: caller cannot alter their own role
-        if self.instance and caller and self.instance.id == caller.id:
+        # -----------------------------------------------------------------
+        # 1. Self-Modification Guards (BUG 2)
+        # -----------------------------------------------------------------
+        is_self_edit = bool(self.instance and caller and self.instance.id == caller.id)
+        if is_self_edit:
             if 'role' in attrs and attrs['role'] != self.instance.role:
-                errors['role'] = ['Cannot modify your own administrative role.']
+                errors['role'] = ['You cannot change your own operational role.']
+            if 'zone' in attrs and (attrs['zone'] or '').strip().lower() != (self.instance.zone or '').strip().lower():
+                errors['zone'] = ['You cannot change your own assigned jurisdiction.']
+            if 'custom_permissions' in attrs and not caller_is_super:
+                if set(attrs['custom_permissions']) != set(self.instance.custom_permissions or []):
+                    errors['custom_permissions'] = ['You cannot modify your own granular permissions.']
 
         # -----------------------------------------------------------------
-        # 2. SYS_ADMIN Hierarchy & Scope Guards
+        # 2. Role Change & Creation Hierarchy Guards (BUG 2 & BUG 3)
         # -----------------------------------------------------------------
-        if caller and caller.role == UserRole.SYS_ADMIN and not caller_is_super:
-            if role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER]:
-                errors['role'] = [f"System Administrators cannot assign or manage '{role}' accounts."]
+        is_role_change = bool(self.instance and 'role' in attrs and attrs['role'] != self.instance.role)
+        is_user_creation = bool(not self.instance)
+
+        if is_role_change and not is_self_edit:
+            if caller_is_super:
+                pass  # Super Admin can change roles
+            elif caller and caller.role == UserRole.MAIN_OFFICER:
+                if role == UserRole.SUPER_ADMIN:
+                    errors['role'] = ['Only Super Administrators can assign the Super Admin role.']
+            elif caller and caller.role == UserRole.SYS_ADMIN:
+                # SYS_ADMIN can ONLY change roles for users in their own zone to CONSTABLE or SHO
+                if role not in [UserRole.CONSTABLE, UserRole.SHO]:
+                    errors['role'] = [f"System Administrators can only assign Constable or SHO roles, not '{role}'."]
+                if self.instance.role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN]:
+                    errors['role'] = [f"System Administrators cannot modify the role of '{self.instance.role}' accounts."]
+            else:
+                errors['role'] = ['You are not authorized to change operational roles.']
+
+        if is_user_creation:
+            if caller and caller.role == UserRole.SYS_ADMIN:
+                if role not in [UserRole.CONSTABLE, UserRole.SHO]:
+                    errors['role'] = [f"System Administrators can only create Constable or SHO accounts, not '{role}'."]
+            elif caller and caller.role not in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER] and not caller_is_super:
+                errors['role'] = ['You are not authorized to create officer accounts.']
 
         # -----------------------------------------------------------------
         # 3. Custom Permissions Privilege Escalation Guard
         # -----------------------------------------------------------------
-        if 'custom_permissions' in attrs and attrs['custom_permissions']:
+        if 'custom_permissions' in attrs and attrs['custom_permissions'] and not is_self_edit:
             if not caller_is_super:
-                for sensitive_perm in ['manage_role_templates', 'manage_roles']:
+                for sensitive_perm in ['manage_role_templates', 'manage_roles', 'global_settings', 'manage_geography']:
                     if sensitive_perm in attrs['custom_permissions']:
                         errors['custom_permissions'] = [
                             f"Permission '{sensitive_perm}' can only be granted by a Super Administrator."
@@ -203,11 +256,9 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
         # -----------------------------------------------------------------
         # 4. Scope Enforcement for Zone-Scoped Administrators (SYS_ADMIN / Zoned MAIN_OFFICER)
         # -----------------------------------------------------------------
-        if caller and not is_global_admin and caller_zone:
-            # Self-protection: caller cannot alter their own assigned zone
-            if self.instance and self.instance.id == caller.id:
-                if 'zone' in attrs and (attrs['zone'] or '').strip().lower() != caller_zone.lower():
-                    errors['zone'] = ['Cannot modify your own assigned zone jurisdiction.']
+        if caller and (caller.role == UserRole.SYS_ADMIN or (caller.role == UserRole.MAIN_OFFICER and caller_zone)):
+            if caller.role == UserRole.SYS_ADMIN and not caller_zone:
+                errors['detail'] = ['Your System Administrator account has no assigned zone. Contact Super Admin.']
 
             # Target user zone boundary:
             if not self.instance:
@@ -225,8 +276,8 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
                 if role in [UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN]:
                     attrs['zone'] = caller_zone
                     zone = caller_zone
-            else:
-                # Updating existing user: cannot transfer across zones or remove zone
+            elif not is_self_edit:
+                # Updating another user: cannot transfer across zones or remove zone
                 if 'zone' in attrs:
                     new_zone = (attrs['zone'] or '').strip()
                     if new_zone and new_zone.lower() != caller_zone.lower():

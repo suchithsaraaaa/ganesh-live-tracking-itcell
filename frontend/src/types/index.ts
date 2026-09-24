@@ -25,8 +25,10 @@ export interface User {
   must_change_password: boolean;
   permissions?: string[];
   custom_permissions?: string[];
+  effective_permissions?: string[];
   date_joined?: string;
   role_display?: string;
+  jurisdiction_display?: string;
 }
 
 export interface RolePermissionTemplate {

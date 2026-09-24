@@ -388,7 +388,7 @@ class TimestampLookupView(APIView):
         if not timestamp_str:
             return Response({'error': 'timestamp parameter is required (ISO format).'}, status=status.HTTP_400_BAD_REQUEST)
 
-        idol = get_object_or_404(Idol, gpid__iexact=gpid)
+        idol = get_object_or_404(filter_by_jurisdiction(Idol.objects.all(), request.user), gpid__iexact=gpid)
 
         norm_ts = timestamp_str.replace(' ', '+')
         from django.utils.dateparse import parse_datetime
@@ -562,7 +562,7 @@ class JourneyView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, gpid):
-        idol = get_object_or_404(Idol, gpid__iexact=gpid)
+        idol = get_object_or_404(filter_by_jurisdiction(Idol.objects.all(), request.user), gpid__iexact=gpid)
         session_id = request.query_params.get('session_id')
 
         if session_id and str(session_id).isdigit():
@@ -605,7 +605,14 @@ class SessionJourneyView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, session_id):
-        session = get_object_or_404(TrackingSession, id=session_id)
+        scoped_sessions = filter_by_jurisdiction(
+            TrackingSession.objects.all(),
+            request.user,
+            ps_field='assignment__idol__police_station',
+            zone_field='assignment__idol__zone',
+            division_field='assignment__idol__division'
+        )
+        session = get_object_or_404(scoped_sessions, id=session_id)
         return build_session_journey_response(session, session.assignment.idol)
 
 
@@ -750,7 +757,7 @@ class LatestLocationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, gpid):
-        idol = get_object_or_404(Idol, gpid__iexact=gpid)
+        idol = get_object_or_404(filter_by_jurisdiction(Idol.objects.all(), request.user), gpid__iexact=gpid)
         latest_point = LocationPoint.objects.filter(
             session__assignment__idol=idol
         ).order_by('-recorded_at').first()

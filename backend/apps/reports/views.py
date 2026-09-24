@@ -204,7 +204,7 @@ class DownloadIdolReportView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, gpid):
-        idol = get_object_or_404(Idol, gpid__iexact=gpid)
+        idol = get_object_or_404(filter_by_jurisdiction(Idol.objects.all(), request.user), gpid__iexact=gpid)
         session_id = request.query_params.get('session_id')
 
         pdf_bytes, report_id = generate_idol_pdf_report(

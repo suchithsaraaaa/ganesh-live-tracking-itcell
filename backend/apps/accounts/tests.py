@@ -1358,6 +1358,278 @@ class SuperAdminAndRoleTemplatesTests(TestCase):
         self.assertIn('custom_permissions', res.data)
 
 
+class TargetedRBACSecurityPatchTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+        self.super_admin = User.objects.create_user(
+            username='suchith_super', password='Password123!',
+            role=UserRole.SUPER_ADMIN, is_superuser=True
+        )
+        self.main_officer = User.objects.create_user(
+            username='hyd_main', password='Password123!',
+            role=UserRole.MAIN_OFFICER
+        )
+        self.sys_admin_jh = User.objects.create_user(
+            username='test1_jh', password='Password123!',
+            role=UserRole.SYS_ADMIN, zone='Jubilee Hills'
+        )
+        self.sys_admin_unzoned = User.objects.create_user(
+            username='unzoned_admin', password='Password123!',
+            role=UserRole.SYS_ADMIN, zone=''
+        )
+        self.acp_jh = User.objects.create_user(
+            username='acp_jh_user', password='Password123!',
+            role=UserRole.ACP, zone='Jubilee Hills'
+        )
+        self.sho_jh = User.objects.create_user(
+            username='sho_jh_user', password='Password123!',
+            role=UserRole.SHO, zone='Jubilee Hills', police_station='Jubilee Hills'
+        )
+        self.constable_jh = User.objects.create_user(
+            username='pc_jh_user', password='Password123!',
+            role=UserRole.CONSTABLE, zone='Jubilee Hills', police_station='Jubilee Hills'
+        )
+        self.constable_cmr = User.objects.create_user(
+            username='pc_cmr_user', password='Password123!',
+            role=UserRole.CONSTABLE, zone='Charminar', police_station='Charminar'
+        )
+
+        # Operational idols in different zones
+        self.idol_jh = Idol.objects.create(
+            gpid='HYDWSTZJBLH0001',
+            name='Jubilee Hills Ganesh',
+            police_station='Jubilee Hills',
+            zone='Jubilee Hills',
+            idol_height=18.0
+        )
+        self.idol_cmr = Idol.objects.create(
+            gpid='HYDSOTZCMNR0002',
+            name='Charminar Ganesh',
+            police_station='Charminar',
+            zone='Charminar',
+            idol_height=18.0
+        )
+
+    # 1-5: SUPER_ADMIN Capabilities & Safety
+    def test_super_admin_can_view_role_templates(self):
+        self.client.force_authenticate(user=self.super_admin)
+        res = self.client.get('/api/v1/auth/role-templates/')
+        self.assertEqual(res.status_code, 200)
+
+    def test_super_admin_can_modify_role_templates(self):
+        self.client.force_authenticate(user=self.super_admin)
+        res = self.client.put('/api/v1/auth/role-templates/SYS_ADMIN/', {
+            'permissions': ['view_dashboard', 'view_live_map'],
+            'description': 'Updated template'
+        }, format='json')
+        self.assertEqual(res.status_code, 200)
+
+    def test_super_admin_can_change_another_user_role(self):
+        self.client.force_authenticate(user=self.super_admin)
+        res = self.client.patch(f'/api/v1/auth/users/{self.constable_jh.id}/', {
+            'role': UserRole.ACP
+        })
+        self.assertEqual(res.status_code, 200)
+        self.constable_jh.refresh_from_db()
+        self.assertEqual(self.constable_jh.role, UserRole.ACP)
+
+    def test_super_admin_can_assign_super_admin(self):
+        self.client.force_authenticate(user=self.super_admin)
+        res = self.client.patch(f'/api/v1/auth/users/{self.main_officer.id}/', {
+            'role': UserRole.SUPER_ADMIN
+        })
+        self.assertEqual(res.status_code, 200)
+        self.main_officer.refresh_from_db()
+        self.assertEqual(self.main_officer.role, UserRole.SUPER_ADMIN)
+
+    def test_super_admin_cannot_demote_last_super_admin(self):
+        # 1. Self-demote blocked
+        self.client.force_authenticate(user=self.super_admin)
+        res_self = self.client.patch(f'/api/v1/auth/users/{self.super_admin.id}/', {
+            'role': UserRole.MAIN_OFFICER
+        })
+        self.assertEqual(res_self.status_code, 400)
+        self.assertEqual(res_self.data['role'], ['You cannot change your own operational role.'])
+
+        # 2. Cannot demote the last remaining active super admin
+        second_super = User.objects.create_user(
+            username='suchith_super_2', password='Password123!',
+            role=UserRole.SUPER_ADMIN, is_superuser=True
+        )
+        self.client.force_authenticate(user=second_super)
+        res_demote = self.client.patch(f'/api/v1/auth/users/{self.super_admin.id}/', {
+            'role': UserRole.MAIN_OFFICER
+        })
+        self.assertEqual(res_demote.status_code, 200)
+
+        # Now only second_super remains as active SUPER_ADMIN
+        self.super_admin.refresh_from_db()
+        self.client.force_authenticate(user=self.super_admin)
+        res_fail = self.client.patch(f'/api/v1/auth/users/{second_super.id}/', {
+            'role': UserRole.MAIN_OFFICER
+        })
+        self.assertEqual(res_fail.status_code, 403)
+
+    # 6-9: MAIN_OFFICER Limitations
+    def test_main_officer_cannot_view_role_templates(self):
+        self.client.force_authenticate(user=self.main_officer)
+        res = self.client.get('/api/v1/auth/role-templates/')
+        self.assertEqual(res.status_code, 403)
+
+    def test_main_officer_cannot_modify_role_templates(self):
+        self.client.force_authenticate(user=self.main_officer)
+        res = self.client.put('/api/v1/auth/role-templates/SYS_ADMIN/', {
+            'permissions': ['view_dashboard']
+        }, format='json')
+        self.assertEqual(res.status_code, 403)
+
+    def test_main_officer_cannot_assign_super_admin(self):
+        self.client.force_authenticate(user=self.main_officer)
+        res = self.client.patch(f'/api/v1/auth/users/{self.constable_jh.id}/', {
+            'role': UserRole.SUPER_ADMIN
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('role', res.data)
+
+    def test_main_officer_cannot_change_own_role(self):
+        self.client.force_authenticate(user=self.main_officer)
+        res = self.client.patch(f'/api/v1/auth/users/{self.main_officer.id}/', {
+            'role': UserRole.SYS_ADMIN
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data['role'], ['You cannot change your own operational role.'])
+
+    # 10-21: SYS_ADMIN (Zonal System Admin) Invariants
+    def test_sys_admin_role_template_endpoints_return_403(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        res_list = self.client.get('/api/v1/auth/role-templates/')
+        self.assertEqual(res_list.status_code, 403)
+        res_detail = self.client.get('/api/v1/auth/role-templates/CONSTABLE/')
+        self.assertEqual(res_detail.status_code, 403)
+
+    def test_sys_admin_cannot_modify_role_templates(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        res = self.client.put('/api/v1/auth/role-templates/CONSTABLE/', {
+            'permissions': ['view_dashboard']
+        }, format='json')
+        self.assertEqual(res.status_code, 403)
+
+    def test_sys_admin_cannot_change_own_role(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        for target_role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER, UserRole.SHO, UserRole.CONSTABLE]:
+            res = self.client.patch(f'/api/v1/auth/users/{self.sys_admin_jh.id}/', {
+                'role': target_role
+            })
+            self.assertEqual(res.status_code, 400)
+            self.assertEqual(res.data['role'], ['You cannot change your own operational role.'])
+
+    def test_sys_admin_cannot_change_own_zone(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        res = self.client.patch(f'/api/v1/auth/users/{self.sys_admin_jh.id}/', {
+            'zone': 'Charminar'
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data['zone'], ['You cannot change your own assigned jurisdiction.'])
+
+    def test_sys_admin_cannot_modify_own_custom_permissions(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        res = self.client.patch(f'/api/v1/auth/users/{self.sys_admin_jh.id}/', {
+            'custom_permissions': ['manage_roles']
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data['custom_permissions'], ['You cannot modify your own granular permissions.'])
+
+    def test_sys_admin_can_promote_constable_to_sho_in_own_zone(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        res = self.client.patch(f'/api/v1/auth/users/{self.constable_jh.id}/', {
+            'role': UserRole.SHO
+        })
+        self.assertEqual(res.status_code, 200)
+        self.constable_jh.refresh_from_db()
+        self.assertEqual(self.constable_jh.role, UserRole.SHO)
+
+    def test_sys_admin_cannot_promote_to_acp_or_main_officer_or_super_admin(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        for unauth_role in [UserRole.ACP, UserRole.SYS_ADMIN, UserRole.MAIN_OFFICER, UserRole.SUPER_ADMIN]:
+            res = self.client.patch(f'/api/v1/auth/users/{self.constable_jh.id}/', {
+                'role': unauth_role
+            })
+            self.assertEqual(res.status_code, 400)
+            self.assertIn('role', res.data)
+
+    def test_sys_admin_cannot_modify_users_in_other_zones(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        res = self.client.patch(f'/api/v1/auth/users/{self.constable_cmr.id}/', {
+            'first_name': 'Hacked'
+        })
+        self.assertEqual(res.status_code, 404)
+
+    def test_sys_admin_cross_zone_idol_isolation(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        # Own zone idol works
+        res_own = self.client.get(f'/api/v1/tracking/idols/{self.idol_jh.gpid}/journey/')
+        self.assertEqual(res_own.status_code, 200)
+
+        # Cross zone idol returns 404
+        res_cross = self.client.get(f'/api/v1/tracking/idols/{self.idol_cmr.gpid}/journey/')
+        self.assertEqual(res_cross.status_code, 404)
+
+        # Cross zone timestamp lookup returns 404
+        res_ts = self.client.get(f'/api/v1/tracking/idols/{self.idol_cmr.gpid}/location-at/?timestamp=2026-09-25T10:00:00Z')
+        self.assertEqual(res_ts.status_code, 404)
+
+        # Cross zone report download returns 404
+        res_rep = self.client.get(f'/api/v1/reports/idols/{self.idol_cmr.id}/download/')
+        self.assertEqual(res_rep.status_code, 404)
+
+    def test_sys_admin_unzoned_returns_empty_querysets(self):
+        self.client.force_authenticate(user=self.sys_admin_unzoned)
+        # Idols
+        res_idols = self.client.get('/api/v1/idols/')
+        self.assertEqual(res_idols.status_code, 200)
+        self.assertEqual(len(res_idols.data['results']), 0)
+
+        # Police stations
+        res_ps = self.client.get('/api/v1/geography/police-stations/')
+        self.assertEqual(res_ps.status_code, 200)
+        self.assertEqual(res_ps.data['count'], 0)
+        self.assertEqual(len(res_ps.data['results']), 0)
+
+        # Assignable officers
+        res_officers = self.client.get('/api/v1/auth/officers/')
+        self.assertEqual(res_officers.status_code, 200)
+        self.assertEqual(len(res_officers.data['results']), 0)
+
+    # 22-23: ACP, SHO, CONSTABLE Safety
+    def test_subordinate_roles_cannot_access_templates_or_change_own_role(self):
+        for officer in [self.acp_jh, self.sho_jh, self.constable_jh]:
+            self.client.force_authenticate(user=officer)
+            # Cannot access role templates
+            res_tmpl = self.client.get('/api/v1/auth/role-templates/')
+            self.assertEqual(res_tmpl.status_code, 403)
+
+            # Cannot change own role
+            res_role = self.client.patch(f'/api/v1/auth/users/{officer.id}/', {
+                'role': UserRole.SUPER_ADMIN
+            })
+            # May be 400 (validation) or 403 (unauthorized to edit users)
+            self.assertIn(res_role.status_code, [400, 403])
+
+    def test_user_serializer_displays_zonal_system_admin(self):
+        self.client.force_authenticate(user=self.super_admin)
+        res_jh = self.client.get(f'/api/v1/auth/users/{self.sys_admin_jh.id}/')
+        self.assertEqual(res_jh.status_code, 200)
+        self.assertEqual(res_jh.data['role_display'], 'Zonal System Admin')
+        self.assertEqual(res_jh.data['jurisdiction_display'], 'Jubilee Hills')
+
+        res_super = self.client.get(f'/api/v1/auth/users/{self.super_admin.id}/')
+        self.assertEqual(res_super.status_code, 200)
+        self.assertEqual(res_super.data['role_display'], 'Super Administrator')
+        self.assertEqual(res_super.data['jurisdiction_display'], 'City Wide')
+
+
+
 
 
 

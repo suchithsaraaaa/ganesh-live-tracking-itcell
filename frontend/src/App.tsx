@@ -2,7 +2,7 @@ import React, { Suspense, lazy } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { TrackingProvider } from './context/TrackingContext';
-import { canManageAssignments, isMainOfficer } from './context/AuthContext';
+import { canManageAssignments, isMainOfficer, isSuperAdmin } from './context/AuthContext';
 import { RequireAuth, RequireRole } from './routes/guards';
 import { AppLayout } from './components/layout/AppLayout';
 import { LoadingState } from './components/shared/States';
@@ -59,6 +59,9 @@ export const App: React.FC = () => {
 
               <Route element={<RequireRole allow={isMainOfficer} />}>
                 <Route path="users" element={<UsersPage />} />
+              </Route>
+
+              <Route element={<RequireRole allow={isSuperAdmin} />}>
                 <Route path="roles" element={<RolesPage />} />
               </Route>
 

@@ -120,6 +120,15 @@ export const UsersPage: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const isEditingSelf = useMemo(() => {
+    return Boolean(
+      modalMode === 'edit' &&
+      selectedUser &&
+      currentUser &&
+      (selectedUser.id === currentUser.id || selectedUser.username === currentUser.username)
+    );
+  }, [modalMode, selectedUser, currentUser]);
+
   // Delete confirmation modal
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -550,7 +559,7 @@ export const UsersPage: React.FC = () => {
                 <option value="ALL">All Roles / Levels</option>
                 <option value="SUPER_ADMIN">Super Administrator</option>
                 <option value="MAIN_OFFICER">Main Officer / Admin</option>
-                <option value="SYS_ADMIN">System Admin</option>
+                <option value="SYS_ADMIN">Zonal System Admin</option>
                 <option value="ACP">ACP / Senior Officer</option>
                 <option value="SHO">SHO / Station Officer</option>
                 <option value="CONSTABLE">Constable / Ground Staff</option>
@@ -699,14 +708,14 @@ export const UsersPage: React.FC = () => {
                             : 'bg-elevated-2 text-text-secondary border-border-default'
                         }`}
                       >
-                        {roleLabel(u.role)}
+                        {roleLabel(u.role, u)}
                       </span>
                     </div>
 
                     {/* Jurisdiction */}
                     <div className="w-44 min-w-0">
                       <div className="text-text-primary truncate font-medium">
-                        {u.police_station || 'City Wide'}
+                        {u.police_station || (u.role === 'SYS_ADMIN' && u.zone ? `${u.zone} (Zone Wide)` : (u.role === 'SUPER_ADMIN' || u.role === 'MAIN_OFFICER') && !u.zone ? 'City Wide' : u.zone || 'City Wide')}
                       </div>
                       <div className="text-[10px] text-text-tertiary truncate">
                         {u.zone || 'Hyderabad District'}
@@ -743,14 +752,23 @@ export const UsersPage: React.FC = () => {
                         const isSelf = currentUser?.id === u.id || currentUser?.username === u.username;
                         const isTargetSuper = u.role === 'SUPER_ADMIN';
                         const callerIsSuper = isSuperAdmin(currentUser);
-                        const canEditTarget = !isTargetSuper || callerIsSuper;
+                        const canEditTarget = callerIsSuper || (
+                          currentUser?.role === 'MAIN_OFFICER' ? !isTargetSuper :
+                          currentUser?.role === 'SYS_ADMIN' ? (isSelf || u.role === 'CONSTABLE' || u.role === 'SHO') :
+                          false
+                        );
+                        const canManageTarget = callerIsSuper || (
+                          currentUser?.role === 'MAIN_OFFICER' ? !isTargetSuper :
+                          currentUser?.role === 'SYS_ADMIN' ? (u.role === 'CONSTABLE' || u.role === 'SHO') :
+                          false
+                        );
 
                         return (
                           <>
                             <button
                               onClick={() => canEditTarget && openEditModal(u)}
                               disabled={!canEditTarget}
-                              title={!canEditTarget ? "Only Super Administrators can edit a Super Admin account." : "Edit Officer & Permissions"}
+                              title={!canEditTarget ? "You do not have permission to edit this account." : "Edit Officer & Permissions"}
                               className={`p-1.5 rounded transition-colors ${
                                 !canEditTarget
                                   ? 'opacity-30 cursor-not-allowed text-text-tertiary'
@@ -760,19 +778,19 @@ export const UsersPage: React.FC = () => {
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
                             <button
-                              onClick={() => canEditTarget && !isSelf && handleToggleActive(u)}
-                              disabled={!canEditTarget || isSelf}
+                              onClick={() => canManageTarget && !isSelf && handleToggleActive(u)}
+                              disabled={!canManageTarget || isSelf}
                               title={
                                 isSelf
                                   ? "Cannot disable your own administrative account."
-                                  : !canEditTarget
-                                  ? "Only Super Administrators can disable a Super Admin account."
+                                  : !canManageTarget
+                                  ? "You do not have permission to disable this account."
                                   : u.is_active
                                   ? 'Disable Account'
                                   : 'Enable Account'
                               }
                               className={`p-1.5 rounded transition-colors ${
-                                !canEditTarget || isSelf
+                                !canManageTarget || isSelf
                                   ? 'opacity-30 cursor-not-allowed text-text-tertiary'
                                   : u.is_active
                                   ? 'hover:bg-elevated-2 text-status-critical hover:text-status-critical cursor-pointer'
@@ -782,17 +800,17 @@ export const UsersPage: React.FC = () => {
                               {u.is_active ? <XCircle className="w-3.5 h-3.5" /> : <CheckCircle className="w-3.5 h-3.5" />}
                             </button>
                             <button
-                              onClick={() => canEditTarget && !isSelf && openDeleteModal(u)}
-                              disabled={!canEditTarget || isSelf}
+                              onClick={() => canManageTarget && !isSelf && openDeleteModal(u)}
+                              disabled={!canManageTarget || isSelf}
                               title={
                                 isSelf
                                   ? "You cannot delete your own account."
-                                  : !canEditTarget
-                                  ? "Only Super Administrators can delete a Super Admin account."
+                                  : !canManageTarget
+                                  ? "You do not have permission to delete this account."
                                   : "Permanently Delete Account"
                               }
                               className={`p-1.5 rounded transition-colors ${
-                                !canEditTarget || isSelf
+                                !canManageTarget || isSelf
                                   ? 'opacity-30 cursor-not-allowed text-text-tertiary'
                                   : 'hover:bg-status-critical-soft text-status-critical hover:opacity-80 cursor-pointer'
                               }`}
@@ -914,26 +932,41 @@ export const UsersPage: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-text-secondary font-medium mb-1">
-                    Operational Role <span className="text-status-critical">*</span>
+                  <label className="block text-text-secondary font-medium mb-1 flex items-center justify-between">
+                    <span>Operational Role <span className="text-status-critical">*</span></span>
+                    {isEditingSelf && (
+                      <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        [LOCKED]
+                      </span>
+                    )}
                   </label>
                   <select
                     value={formData.role}
                     onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
-                    disabled={modalMode === 'edit' && selectedUser?.role === 'SUPER_ADMIN' && !isSuperAdmin(currentUser)}
-                    className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer"
+                    disabled={isEditingSelf || (modalMode === 'edit' && selectedUser?.role === 'SUPER_ADMIN' && !isSuperAdmin(currentUser))}
+                    className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    <option value="CONSTABLE">CONSTABLE (Ground Staff)</option>
-                    <option value="SHO">SHO (Station Officer)</option>
-                    <option value="ACP">ACP (Senior Officer)</option>
-                    {currentUser?.role !== 'SYS_ADMIN' && (
+                    {isEditingSelf ? (
+                      <option value={formData.role}>
+                        {formData.role === 'SYS_ADMIN' && (formData.zone || currentUser?.zone)
+                          ? 'SYS_ADMIN (Zonal System Admin)'
+                          : roleLabel(formData.role, selectedUser || currentUser || undefined)}
+                      </option>
+                    ) : (
                       <>
-                        <option value="SYS_ADMIN">SYS_ADMIN (Zone Admin)</option>
-                        <option value="MAIN_OFFICER">MAIN_OFFICER (Headquarters Command)</option>
+                        <option value="CONSTABLE">CONSTABLE (Ground Staff)</option>
+                        <option value="SHO">SHO (Station Officer)</option>
+                        {currentUser?.role !== 'SYS_ADMIN' && (
+                          <>
+                            <option value="ACP">ACP (Senior Officer)</option>
+                            <option value="SYS_ADMIN">SYS_ADMIN (Zonal System Admin)</option>
+                            <option value="MAIN_OFFICER">MAIN_OFFICER (Headquarters Command)</option>
+                          </>
+                        )}
+                        {isSuperAdmin(currentUser) && (
+                          <option value="SUPER_ADMIN">SUPER_ADMIN (Super Administrator)</option>
+                        )}
                       </>
-                    )}
-                    {isSuperAdmin(currentUser) && (
-                      <option value="SUPER_ADMIN">SUPER_ADMIN (Super Administrator)</option>
                     )}
                   </select>
                 </div>
@@ -961,9 +994,9 @@ export const UsersPage: React.FC = () => {
                   <select
                     value={formData.zone}
                     onChange={(e) => handleZoneChange(e.target.value)}
-                    disabled={isZonedAdmin}
+                    disabled={isEditingSelf || isZonedAdmin}
                     required={formData.role === 'CONSTABLE' || formData.role === 'SHO' || formData.role === 'ACP' || isZonedAdmin}
-                    className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer disabled:opacity-60"
+                    className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     {!isZonedAdmin && (
                       <option value="">
@@ -987,9 +1020,9 @@ export const UsersPage: React.FC = () => {
                   <select
                     value={formData.police_station}
                     onChange={(e) => handleStationChange(e.target.value)}
-                    disabled={!formData.zone && formData.role !== 'MAIN_OFFICER'}
+                    disabled={isEditingSelf || (!formData.zone && formData.role !== 'MAIN_OFFICER')}
                     required={formData.role === 'CONSTABLE' || formData.role === 'SHO'}
-                    className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer disabled:opacity-50"
+                    className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {!formData.zone ? (
                       <option value="">
@@ -1044,24 +1077,40 @@ export const UsersPage: React.FC = () => {
                   </span>
                 </div>
 
+                {isEditingSelf && !isSuperAdmin(currentUser) && (
+                  <div className="text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded p-2 mb-2">
+                    Granular permissions for your own account are locked and can only be modified by a Super Administrator.
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-base p-3 rounded-md border border-border-subtle max-h-48 overflow-y-auto">
                   {CANONICAL_PERMISSIONS
-                    .filter((perm) => isSuperAdmin(currentUser) || (perm.key !== 'manage_role_templates' && perm.key !== 'manage_roles'))
+                    .filter((perm) => {
+                      if (isSuperAdmin(currentUser)) return true;
+                      const SENSITIVE_PERMISSION_KEYS = ['manage_roles', 'manage_role_templates', 'global_settings', 'manage_geography'];
+                      if (SENSITIVE_PERMISSION_KEYS.includes(perm.key)) return false;
+                      const callerPerms = currentUser?.effective_permissions || [];
+                      return callerPerms.includes(perm.key);
+                    })
                     .map((perm) => {
                     const isChecked = formData.custom_permissions.includes(perm.key);
+                    const isPermLocked = isEditingSelf && !isSuperAdmin(currentUser);
                     return (
                       <label
                         key={perm.key}
-                        onClick={() => togglePermission(perm.key)}
-                        className={`flex items-start space-x-2 p-2 rounded cursor-pointer transition-colors ${
+                        onClick={() => !isPermLocked && togglePermission(perm.key)}
+                        className={`flex items-start space-x-2 p-2 rounded transition-colors ${
+                          isPermLocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
+                        } ${
                           isChecked ? 'bg-accent/10 border border-accent/25' : 'hover:bg-elevated border border-transparent'
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={isChecked}
+                          disabled={isPermLocked}
                           onChange={() => {}}
-                          className="mt-0.5 rounded border-border-default bg-elevated-2 text-accent focus:ring-0 shrink-0"
+                          className="mt-0.5 rounded border-border-default bg-elevated-2 text-accent focus:ring-0 shrink-0 disabled:cursor-not-allowed"
                         />
                         <div className="min-w-0">
                           <div className="font-medium text-text-primary text-[11px] truncate">{perm.label}</div>

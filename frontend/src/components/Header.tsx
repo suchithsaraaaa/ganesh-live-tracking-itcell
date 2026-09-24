@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { RefreshCw, UserCheck, LogOut } from 'lucide-react';
-import { useAuth, roleLabel } from '../context/AuthContext';
+import { useAuth, formatUserIdentity } from '../context/AuthContext';
 import { useTracking } from '../context/TrackingContext';
 import telanganaPoliceLogo from '../assets/branding/telangana-police-logo.png';
 
@@ -81,7 +81,7 @@ export const Header: React.FC = () => {
               {user?.username || 'Unknown User'}
             </div>
             <div className="text-[10px] text-text-tertiary">
-              {user ? roleLabel(user.role) : ''} &bull; {user?.police_station || 'City Wide'}
+              {user ? formatUserIdentity(user).fullLabel : ''}
             </div>
           </div>
         </div>

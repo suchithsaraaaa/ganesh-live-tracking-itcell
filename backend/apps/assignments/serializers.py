@@ -113,9 +113,16 @@ class CreateAssignmentSerializer(serializers.Serializer):
         if request and request.user.is_authenticated:
             caller = request.user
             caller_zone = (caller.zone or '').strip()
-            is_global_admin = caller.is_superuser or (caller.role == UserRole.MAIN_OFFICER and not caller_zone)
+            is_global_admin = bool(caller.is_superuser or caller.role == UserRole.SUPER_ADMIN or (caller.role == UserRole.MAIN_OFFICER and not caller_zone))
             if not is_global_admin:
-                if caller.role in [UserRole.MAIN_OFFICER, getattr(UserRole, 'SYS_ADMIN', 'SYS_ADMIN'), UserRole.ACP]:
+                if caller.role == UserRole.SYS_ADMIN:
+                    if not caller_zone:
+                        raise serializers.ValidationError({'error': 'Your System Administrator account has no assigned zone.'})
+                    if idol.zone and idol.zone.lower() != caller_zone.lower():
+                        raise serializers.ValidationError({'gpid': f"Idol is in '{idol.zone}', outside your assigned zone ('{caller_zone}')."})
+                    if constable.zone and constable.zone.lower() != caller_zone.lower():
+                        raise serializers.ValidationError({'constable_id': f"Officer is in '{constable.zone}', outside your assigned zone ('{caller_zone}')."})
+                elif caller.role in [UserRole.MAIN_OFFICER, UserRole.ACP]:
                     if caller_zone and idol.zone and idol.zone.lower() != caller_zone.lower():
                         raise serializers.ValidationError({'error': 'Idol is outside your authorized zone jurisdiction.'})
                 elif caller.role == UserRole.SHO:

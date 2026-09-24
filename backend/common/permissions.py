@@ -90,10 +90,16 @@ def filter_by_jurisdiction(queryset, user, ps_field='police_station', zone_field
 
     user_zone = (getattr(user, 'zone', '') or '').strip()
 
-    # SYS_ADMIN or MAIN_OFFICER:
-    # If a zone is assigned, access is strictly limited to that zone.
-    # If no zone is assigned, the user is a city-wide / global administrator.
-    if user.role in [UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN]:
+    # SYS_ADMIN: strictly a Zonal System Admin.
+    # Must only receive data for their assigned zone.
+    # If no zone is assigned, DO NOT silently treat as city-wide — enforce safest restriction (none).
+    if user.role == UserRole.SYS_ADMIN:
+        if user_zone:
+            return queryset.filter(**{f"{zone_field}__iexact": user_zone})
+        return queryset.none()
+
+    # MAIN_OFFICER: City-wide operational officer (or zone-scoped if assigned to a zone).
+    if user.role == UserRole.MAIN_OFFICER:
         if user_zone:
             return queryset.filter(**{f"{zone_field}__iexact": user_zone})
         return queryset
