@@ -50,6 +50,8 @@ DATABASES = {
         'PASSWORD': db_password,
         'HOST': os.environ.get('DB_HOST') or os.environ.get('POSTGRES_HOST') or 'db',
         'PORT': os.environ.get('DB_PORT') or os.environ.get('POSTGRES_PORT') or '5432',
+        'CONN_MAX_AGE': int(os.environ.get('CONN_MAX_AGE', '60')),
+        'CONN_HEALTH_CHECKS': True,
     }
 }
 

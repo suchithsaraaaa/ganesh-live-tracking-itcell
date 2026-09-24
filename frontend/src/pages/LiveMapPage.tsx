@@ -92,8 +92,24 @@ export const LiveMapPage: React.FC = () => {
 
   useEffect(() => {
     pollActive();
-    const interval = setInterval(pollActive, 3000);
-    return () => clearInterval(interval);
+    const tick = () => {
+      if (!document.hidden) {
+        pollActive();
+      }
+    };
+    const interval = setInterval(tick, 3000);
+
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        pollActive();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, [pollActive]);
 
 

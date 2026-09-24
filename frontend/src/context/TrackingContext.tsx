@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { DashboardKPIs, ActiveMarker, TimestampLookupResult, JourneyBreadcrumb, Idol } from '../types';
 import { fetchDashboardData, fetchJourney } from '../api/client';
 
@@ -46,9 +46,17 @@ interface TrackingContextValue {
   closeAssignment: () => void;
 
   loadDashboard: (showSpin?: boolean) => Promise<void>;
+
+  /** Call on mount from pages that need live dashboard polling (Dashboard, LiveMap, etc.) */
+  activatePolling: () => void;
+  /** Call on unmount to decrement the polling subscriber count */
+  deactivatePolling: () => void;
 }
 
 const TrackingContext = createContext<TrackingContextValue | undefined>(undefined);
+
+/** Dashboard polling interval in milliseconds */
+const DASHBOARD_POLL_INTERVAL_MS = 10_000;
 
 export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [kpis, setKpis] = useState<DashboardKPIs | null>(null);
@@ -74,6 +82,22 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [historicalLookup, setHistoricalLookup] = useState<TimestampLookupResult | null>(null);
   const [journeyTrail, setJourneyTrail] = useState<JourneyBreadcrumb[] | null>(null);
   const [isLoadingJourney, setIsLoadingJourney] = useState(false);
+
+  // Polling subscriber ref-count: only poll when > 0 pages need live data
+  const pollingSubscribersRef = useRef(0);
+  const [pollingActive, setPollingActive] = useState(false);
+
+  const activatePolling = useCallback(() => {
+    pollingSubscribersRef.current += 1;
+    setPollingActive(true);
+  }, []);
+
+  const deactivatePolling = useCallback(() => {
+    pollingSubscribersRef.current = Math.max(0, pollingSubscribersRef.current - 1);
+    if (pollingSubscribersRef.current === 0) {
+      setPollingActive(false);
+    }
+  }, []);
 
   const loadDashboard = useCallback(async (showSpin: boolean = false) => {
     if (showSpin) setIsRefreshing(true);
@@ -110,11 +134,34 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [selectedZone, selectedPs, selectedHeightBucket, isImmersionsToday]);
 
+  // Conditional polling: only runs when pollingActive is true AND tab is visible
   useEffect(() => {
+    if (!pollingActive) return;
+
+    // Initial fetch when polling activates
     loadDashboard(true);
-    const interval = setInterval(() => loadDashboard(false), 10000);
-    return () => clearInterval(interval);
-  }, [loadDashboard]);
+
+    const tick = () => {
+      // Skip polling when tab is hidden to avoid wasting bandwidth
+      if (!document.hidden) {
+        loadDashboard(false);
+      }
+    };
+
+    const interval = setInterval(tick, DASHBOARD_POLL_INTERVAL_MS);
+
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        loadDashboard(false);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [pollingActive, loadDashboard]);
 
   const handleSelectMarker = useCallback((marker: ActiveMarker) => {
     setSelectedMarker(marker);
@@ -243,7 +290,7 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     historicalLookup, setHistoricalLookup, journeyTrail, isLoadingJourney, handleToggleJourney,
     timestampModalOpen, targetGpidForLookup, openTimestampLookup, closeTimestampLookup,
     assignmentModalOpen, targetGpidForAssignment, openAssignment, closeAssignment,
-    loadDashboard,
+    loadDashboard, activatePolling, deactivatePolling,
   };
 
   return <TrackingContext.Provider value={value}>{children}</TrackingContext.Provider>;

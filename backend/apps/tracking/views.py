@@ -170,10 +170,10 @@ class IngestLocationView(APIView):
         data = serializer.validated_data
         session = get_object_or_404(TrackingSession, id=data['session_id'], status=TrackingSessionStatus.ACTIVE)
 
-        # Check for duplicate of initial start GPS point
-        initial_point = LocationPoint.objects.filter(session=session).order_by('recorded_at').first()
-        if initial_point and session.started_at and abs((data['recorded_at'] - session.started_at).total_seconds()) <= 15:
-            if abs(data['latitude'] - initial_point.latitude) < 0.0001 and abs(data['longitude'] - initial_point.longitude) < 0.0001:
+        # Check for duplicate of initial start GPS point (only within first 15 seconds of session start)
+        if session.started_at and abs((data['recorded_at'] - session.started_at).total_seconds()) <= 15:
+            initial_point = LocationPoint.objects.filter(session=session).order_by('recorded_at').first()
+            if initial_point and abs(data['latitude'] - initial_point.latitude) < 0.0001 and abs(data['longitude'] - initial_point.longitude) < 0.0001:
                 if data.get('accuracy') is not None and not initial_point.accuracy:
                     initial_point.accuracy = data.get('accuracy')
                     initial_point.save(update_fields=['accuracy'])

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useTracking } from '../context/TrackingContext';
 import { KpiCards } from '../components/KpiCards';
 import { LiveMap } from '../components/LiveMap';
@@ -16,7 +16,13 @@ export const DashboardPage: React.FC = () => {
     filteredMarkers, selectedMarker, handleSelectMarker, handleClearSelection,
     historicalLookup, journeyTrail,
     selectedZone, setSelectedZone,
+    activatePolling, deactivatePolling,
   } = useTracking();
+
+  useEffect(() => {
+    activatePolling();
+    return () => deactivatePolling();
+  }, [activatePolling, deactivatePolling]);
 
   return (
     <div className="h-full flex flex-col overflow-y-auto animate-fade-in-up">

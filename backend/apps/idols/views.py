@@ -132,9 +132,11 @@ class DashboardStatsView(APIView):
             qs.values_list('procession_state').annotate(c=Count('id'))
         )
 
-        tracking_active = qs.filter(
-            procession_state__in=[ProcessionState.TRACKING, ProcessionState.MOVING, ProcessionState.HOLDING]
-        ).count()
+        tracking_active = (
+            counts_by_state.get(ProcessionState.TRACKING, 0) +
+            counts_by_state.get(ProcessionState.MOVING, 0) +
+            counts_by_state.get(ProcessionState.HOLDING, 0)
+        )
         moving = counts_by_state.get(ProcessionState.MOVING, 0)
         holding = counts_by_state.get(ProcessionState.HOLDING, 0)
         at_visarjan = counts_by_state.get(ProcessionState.AT_VISARJAN, 0)
@@ -145,10 +147,15 @@ class DashboardStatsView(APIView):
         assigned_count = qs.filter(assignments__is_active=True).distinct().count()
         unassigned = max(0, total_idols - assigned_count)
 
-        # Height distribution counts for current eligible query
-        h_15_20 = qs.filter(idol_height__gte=15, idol_height__lt=21).count()
-        h_21_25 = qs.filter(idol_height__gte=21, idol_height__lt=26).count()
-        h_26_plus = qs.filter(idol_height__gte=26).count()
+        # Height distribution counts for current eligible query in a single query
+        height_aggs = qs.aggregate(
+            h_15_20=Count('id', filter=Q(idol_height__gte=15, idol_height__lt=21)),
+            h_21_25=Count('id', filter=Q(idol_height__gte=21, idol_height__lt=26)),
+            h_26_plus=Count('id', filter=Q(idol_height__gte=26)),
+        )
+        h_15_20 = height_aggs['h_15_20'] or 0
+        h_21_25 = height_aggs['h_21_25'] or 0
+        h_26_plus = height_aggs['h_26_plus'] or 0
 
         from apps.assignments.models import Assignment
         active_assignments_by_idol = {
@@ -157,10 +164,23 @@ class DashboardStatsView(APIView):
         }
 
         # Query active tracking sessions for map markers (priority live telemetry)
-        active_sessions = TrackingSession.objects.filter(
+        active_sessions = list(TrackingSession.objects.filter(
             assignment__idol__in=qs,
             status=TrackingSessionStatus.ACTIVE
-        ).select_related('assignment__idol', 'assignment__constable').order_by('-started_at')
+        ).select_related('assignment__idol', 'assignment__constable').order_by('-started_at'))
+
+        # Batch-fetch latest location points for all active sessions to eliminate N+1 queries
+        active_session_ids = [s.id for s in active_sessions]
+        latest_pts_by_session = {}
+        if active_session_ids:
+            try:
+                # PostgreSQL high-performance indexed query
+                for lp in LocationPoint.objects.filter(session_id__in=active_session_ids).order_by('session_id', '-recorded_at').distinct('session_id'):
+                    latest_pts_by_session[lp.session_id] = lp
+            except Exception:
+                # SQLite fallback during local development / testing
+                for lp in LocationPoint.objects.filter(session_id__in=active_session_ids).order_by('recorded_at'):
+                    latest_pts_by_session[lp.session_id] = lp
 
         active_markers = []
         seen_gpids = set()
@@ -176,7 +196,7 @@ class DashboardStatsView(APIView):
             seen_gpids.add(idol.gpid)
 
             constable = sess.assignment.constable
-            latest_pt = sess.location_points.order_by('-recorded_at').first()
+            latest_pt = latest_pts_by_session.get(sess.id)
 
             conn_state = get_connection_state(latest_pt.recorded_at if latest_pt else None)
             if conn_state in ['DEGRADED', 'OFFLINE']:
