@@ -157,8 +157,8 @@ async def simulate_web_user(user_id, base_url, metrics, stop_event, auth_headers
         ('dashboard', '/api/v1/idols/dashboard/', 40),
         ('active_tracking', '/api/v1/tracking/active/', 20),
         ('assignments', '/api/v1/assignments/', 15),
-        ('users', '/api/v1/users/', 10),
-        ('reports', '/api/v1/reports/', 10),
+        ('users', '/api/v1/auth/users/', 10),
+        ('reports', '/api/v1/reports/registry/', 10),
         ('auth_me', '/api/v1/auth/me/', 5),
     ]
     # Build weighted selection list
