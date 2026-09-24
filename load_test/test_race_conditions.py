@@ -158,11 +158,13 @@ async def test_race_conditions(base_url, admin_user, admin_pass):
         # -------------------------------------------------------------------------
         print("\n[*] TEST 4: Verifying Force-End Post-Conditions...")
         # 1. Assignment is inactive
-        async with session.get(f"{base_url}/api/v1/assignments/?gpid={target_gpid}") as resp:
+        assert fe_data['assignment']['is_active'] is False, "Assignment is still marked active!"
+        constable_id = fe_data['assignment']['constable']
+        async with session.get(f"{base_url}/api/v1/assignments/?constable_id={constable_id}&is_active=true") as resp:
             a_data = await resp.json()
-            active_for_gpid = [a for a in a_data.get('results', []) if a['is_active']]
-            assert len(active_for_gpid) == 0, "Assignment is still marked active!"
-            print("    [+] Assignment successfully marked inactive.")
+            active_for_officer = a_data.get('results', [])
+            assert len(active_for_officer) == 0, "Officer still has active assignments!"
+            print(f"    [+] Assignment #{target_assignment_id} successfully marked inactive; Officer #{constable_id} is free.")
 
         # 2. Tracking session is terminated, NOT deleted
         async with session.get(f"{base_url}/api/v1/tracking/active/") as resp:
