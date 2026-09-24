@@ -18,6 +18,7 @@ const HoldingPointsPage = lazy(() => import('./pages/HoldingPointsPage').then((m
 const VisarjanPointsPage = lazy(() => import('./pages/VisarjanPointsPage').then((m) => ({ default: m.VisarjanPointsPage })));
 const AssignmentsPage = lazy(() => import('./pages/AssignmentsPage').then((m) => ({ default: m.AssignmentsPage })));
 const UsersPage = lazy(() => import('./pages/UsersPage').then((m) => ({ default: m.UsersPage })));
+const RolesPage = lazy(() => import('./pages/RolesPage').then((m) => ({ default: m.RolesPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const AccessDeniedPage = lazy(() => import('./pages/AccessDeniedPage').then((m) => ({ default: m.AccessDeniedPage })));
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage').then((m) => ({ default: m.NotFoundPage })));
@@ -58,6 +59,7 @@ export const App: React.FC = () => {
 
               <Route element={<RequireRole allow={isMainOfficer} />}>
                 <Route path="users" element={<UsersPage />} />
+                <Route path="roles" element={<RolesPage />} />
               </Route>
 
               <Route path="settings" element={<SettingsPage />} />

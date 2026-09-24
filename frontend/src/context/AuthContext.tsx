@@ -55,22 +55,33 @@ export function useAuth(): AuthContextValue {
 // boundary on every request regardless of what the frontend shows or hides.
 // ---------------------------------------------------------------------------
 
+export function isSuperAdmin(user: User | null): boolean {
+  return user?.role === 'SUPER_ADMIN';
+}
+
 export function isMainOfficer(user: User | null): boolean {
-  return user?.role === 'MAIN_OFFICER';
+  return user?.role === 'SUPER_ADMIN' || user?.role === 'MAIN_OFFICER' || user?.role === 'SYS_ADMIN';
+}
+
+export function isSysAdmin(user: User | null): boolean {
+  return user?.role === 'SYS_ADMIN';
 }
 
 /** Mirrors backend IsStationOfficerOrAbove: who can create/manage assignments. */
 export function canManageAssignments(user: User | null): boolean {
-  const roles: UserRole[] = ['MAIN_OFFICER', 'ACP', 'SHO'];
-  return !!user && roles.includes(user.role);
+  const roles: UserRole[] = ['SUPER_ADMIN', 'MAIN_OFFICER', 'SYS_ADMIN', 'ACP', 'SHO'];
+  return !!user && (roles.includes(user.role) || (user.permissions || []).includes('assign_field_officers'));
 }
 
 export function roleLabel(role: UserRole): string {
   switch (role) {
+    case 'SUPER_ADMIN': return 'Super Administrator';
     case 'MAIN_OFFICER': return 'Main Officer / System Admin';
+    case 'SYS_ADMIN': return 'System Admin';
     case 'ACP': return 'ACP / Senior Officer';
     case 'SHO': return 'Station House Officer';
     case 'CONSTABLE': return 'Constable / Ground Staff';
     default: return role;
   }
 }
+

@@ -5,10 +5,17 @@ from rest_framework import permissions
 from apps.accounts.models import UserRole
 
 
+class IsSuperAdmin(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and (
+            request.user.is_superuser or request.user.role == UserRole.SUPER_ADMIN
+        )
+
+
 class IsMainOfficer(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and (
-            request.user.is_superuser or request.user.role in [UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN]
+            request.user.is_superuser or request.user.role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN]
         )
 
 
@@ -16,7 +23,7 @@ class IsSeniorOfficerOrAbove(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and (
             request.user.is_superuser or
-            request.user.role in [UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN, UserRole.ACP]
+            request.user.role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN, UserRole.ACP]
         )
 
 
@@ -24,7 +31,7 @@ class IsStationOfficerOrAbove(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and (
             request.user.is_superuser or
-            request.user.role in [UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN, UserRole.ACP, UserRole.SHO]
+            request.user.role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN, UserRole.ACP, UserRole.SHO]
         )
 
 
@@ -35,14 +42,14 @@ class IsConstable(permissions.BasePermission):
 
 class CanManageUsers(permissions.BasePermission):
     """
-    Restricted to MAIN_OFFICER, SYS_ADMIN, superuser, or users explicitly granted manage_users capability.
+    Restricted to SUPER_ADMIN, MAIN_OFFICER, SYS_ADMIN, superuser, or users explicitly granted manage_users capability.
     """
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             return False
         return (
             request.user.is_superuser or
-            request.user.role in [UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN] or
+            request.user.role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN] or
             request.user.has_capability('manage_users')
         )
 
@@ -56,7 +63,7 @@ class CanAssignFieldOfficers(permissions.BasePermission):
             return False
         if (
             request.user.is_superuser or
-            request.user.role in [UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN, UserRole.ACP, UserRole.SHO]
+            request.user.role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN, UserRole.ACP, UserRole.SHO]
         ):
             return True
         return request.user.has_capability('assign_field_officers')
@@ -65,7 +72,7 @@ class CanAssignFieldOfficers(permissions.BasePermission):
 def filter_by_jurisdiction(queryset, user, ps_field='police_station', zone_field='zone', division_field='division'):
     """
     Enforces server-side jurisdiction filter on querysets.
-    - Superuser: city-wide access (no filter)
+    - Superuser / SUPER_ADMIN: global city-wide access (no filter)
     - MAIN_OFFICER / SYS_ADMIN without zone: city-wide access (no filter)
     - MAIN_OFFICER / SYS_ADMIN with zone: strictly restricted to authorized zone
     - ACP: restricted to authorized zone/division
@@ -75,7 +82,7 @@ def filter_by_jurisdiction(queryset, user, ps_field='police_station', zone_field
     if not user.is_authenticated:
         return queryset.none()
 
-    if user.is_superuser:
+    if user.is_superuser or user.role == UserRole.SUPER_ADMIN:
         return queryset
 
     user_zone = (getattr(user, 'zone', '') or '').strip()

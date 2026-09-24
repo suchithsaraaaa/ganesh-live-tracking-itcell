@@ -422,6 +422,37 @@ export async function deleteUser(id: number): Promise<{ message: string }> {
   return data;
 }
 
+export async function fetchRoleTemplates(): Promise<{
+  results: import('../types').RolePermissionTemplate[];
+  canonical_permissions: string[];
+}> {
+  const res = await apiFetch('/auth/role-templates/');
+  if (!res.ok) throw new ApiError('Failed to load role templates', res.status);
+  return await res.json();
+}
+
+export async function updateRoleTemplate(
+  role: string,
+  payload: { permissions: string[]; description?: string }
+): Promise<import('../types').RolePermissionTemplate & {
+  added: string[];
+  removed: string[];
+  affected_users_count: number;
+  message: string;
+}> {
+  const res = await apiFetch(`/auth/role-templates/${encodeURIComponent(role)}/`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new ApiError(data.error || summarizeFieldErrors(data) || 'Failed to update role template', res.status);
+  }
+  return data;
+}
+
+
 
 // ---------------------------------------------------------------------------
 // Field Officers Directory

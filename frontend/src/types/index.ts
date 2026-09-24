@@ -1,4 +1,4 @@
-export type UserRole = 'MAIN_OFFICER' | 'SYS_ADMIN' | 'ACP' | 'SHO' | 'CONSTABLE';
+export type UserRole = 'SUPER_ADMIN' | 'MAIN_OFFICER' | 'SYS_ADMIN' | 'ACP' | 'SHO' | 'CONSTABLE';
 
 export type ProcessionState =
   | 'NOT_STARTED'
@@ -26,6 +26,18 @@ export interface User {
   permissions?: string[];
   custom_permissions?: string[];
   date_joined?: string;
+  role_display?: string;
+}
+
+export interface RolePermissionTemplate {
+  id: number | null;
+  role: UserRole;
+  role_display: string;
+  description: string;
+  permissions: string[];
+  user_count: number;
+  updated_at: string | null;
+  updated_by_name: string;
 }
 
 export interface AssignableOfficer {

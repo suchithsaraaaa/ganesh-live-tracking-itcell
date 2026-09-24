@@ -50,7 +50,7 @@ export const Sidebar: React.FC = () => {
       enabled: canManageAssignments(user),
     },
     { key: 'users', label: 'Users', icon: Users, to: '/users', enabled: isMainOfficer(user) },
-    { key: 'roles', label: 'Roles & Permissions', icon: KeyRound, enabled: false },
+    { key: 'roles', label: 'Roles & Permissions', icon: KeyRound, to: '/roles', enabled: isMainOfficer(user) },
     { key: 'settings', label: 'Settings', icon: Settings, to: '/settings', enabled: true },
   ];
 

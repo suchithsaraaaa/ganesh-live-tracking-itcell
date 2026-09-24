@@ -8,12 +8,13 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from common.permissions import CanManageUsers, CanAssignFieldOfficers, filter_by_jurisdiction
-from .models import User, UserRole
+from common.permissions import CanManageUsers, CanAssignFieldOfficers, IsSuperAdmin, filter_by_jurisdiction
+from .models import User, UserRole, RolePermissionTemplate, CANONICAL_PERMISSIONS, ROLE_DEFAULT_PERMISSIONS
 from .serializers import (
     UserSerializer,
     UserCreateUpdateSerializer,
-    AssignableOfficerSerializer
+    AssignableOfficerSerializer,
+    RolePermissionTemplateSerializer,
 )
 
 
@@ -169,6 +170,10 @@ class UserDetailView(APIView):
         if not user:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        caller_is_super = bool(request.user and (request.user.is_superuser or request.user.role == UserRole.SUPER_ADMIN))
+        if user.role == UserRole.SUPER_ADMIN and not caller_is_super:
+            return Response({'error': 'Only Super Administrators can modify a Super Admin account.'}, status=status.HTTP_403_FORBIDDEN)
+
         serializer = UserCreateUpdateSerializer(user, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             updated_user = serializer.save()
@@ -183,6 +188,14 @@ class UserDetailView(APIView):
 
         if user.id == request.user.id:
             return Response({'error': 'Cannot disable your own administrative account.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        caller_is_super = bool(request.user and (request.user.is_superuser or request.user.role == UserRole.SUPER_ADMIN))
+        if user.role == UserRole.SUPER_ADMIN:
+            if not caller_is_super:
+                return Response({'error': 'Only Super Administrators can disable a Super Admin account.'}, status=status.HTTP_403_FORBIDDEN)
+            active_super_count = User.objects.filter(role=UserRole.SUPER_ADMIN, is_active=True).exclude(pk=user.pk).count()
+            if active_super_count < 1:
+                return Response({'error': 'Cannot disable the last active Super Administrator. At least one active Super Admin must exist.'}, status=status.HTTP_400_BAD_REQUEST)
 
         user.is_active = False
         user.save(update_fields=['is_active'])
@@ -206,6 +219,15 @@ class UserToggleActiveView(APIView):
 
         if user.id == request.user.id and user.is_active:
             return Response({'error': 'Cannot disable your own administrative account.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        caller_is_super = bool(request.user and (request.user.is_superuser or request.user.role == UserRole.SUPER_ADMIN))
+        if user.role == UserRole.SUPER_ADMIN:
+            if not caller_is_super:
+                return Response({'error': 'Only Super Administrators can modify a Super Admin account.'}, status=status.HTTP_403_FORBIDDEN)
+            if user.is_active:
+                active_super_count = User.objects.filter(role=UserRole.SUPER_ADMIN, is_active=True).exclude(pk=user.pk).count()
+                if active_super_count < 1:
+                    return Response({'error': 'Cannot disable the last active Super Administrator. At least one active Super Admin must exist.'}, status=status.HTTP_400_BAD_REQUEST)
 
         user.is_active = not user.is_active
         user.save(update_fields=['is_active'])
@@ -310,27 +332,31 @@ class AssignableOfficerDirectoryView(APIView):
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _log_account_event(request, action: str, target_user: User) -> None:
+def _log_account_event(request, action: str, target_user: User, extra_details: dict = None) -> None:
     """Record an administrative account lifecycle event in the audit trail."""
     try:
         from apps.audit.models import AuditEvent
         ip = (
             request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
             or request.META.get('REMOTE_ADDR')
-        ) or None
+        ) if request else None
+        actor = request.user if request and request.user.is_authenticated else None
         full_name = f"{target_user.first_name} {target_user.last_name}".strip() or target_user.username
+        details = {
+            'username': target_user.username,
+            'full_name': full_name,
+            'police_id': target_user.police_id or '',
+            'role': target_user.role,
+            'police_station': target_user.police_station or '',
+        }
+        if extra_details:
+            details.update(extra_details)
         AuditEvent.objects.create(
-            actor=request.user if request.user.is_authenticated else None,
+            actor=actor,
             action=action,
             target_model='User',
             target_id=str(target_user.id),
-            details={
-                'username': target_user.username,
-                'full_name': full_name,
-                'police_id': target_user.police_id or '',
-                'role': target_user.role,
-                'police_station': target_user.police_station or '',
-            },
+            details=details,
             ip_address=ip,
         )
     except Exception:
@@ -375,7 +401,21 @@ class UserDeleteView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # --- 3. Active assignment block ---
+        caller_is_super = bool(request.user and (request.user.is_superuser or request.user.role == UserRole.SUPER_ADMIN))
+
+        # --- 3. Super Admin & Hierarchy Deletion Guards ---
+        if user.role == UserRole.SUPER_ADMIN:
+            if not caller_is_super:
+                return Response({'error': 'Only Super Administrators can delete a Super Admin account.'}, status=status.HTTP_403_FORBIDDEN)
+            active_super_count = User.objects.filter(role=UserRole.SUPER_ADMIN, is_active=True).exclude(pk=user.pk).count()
+            if active_super_count < 1:
+                return Response({'error': 'Cannot delete the last active Super Administrator. At least one active Super Admin must exist.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if request.user.role == UserRole.SYS_ADMIN and not request.user.is_superuser:
+            if user.role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER]:
+                return Response({'error': f"System Administrators cannot delete '{user.role}' accounts."}, status=status.HTTP_403_FORBIDDEN)
+
+        # --- 4. Active assignment block ---
         from apps.assignments.models import Assignment
         if Assignment.objects.filter(constable=user, is_active=True).exists():
             return Response(
@@ -388,7 +428,7 @@ class UserDeleteView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # --- 4. Capture identity snapshot for audit record BEFORE deletion ---
+        # --- 5. Capture identity snapshot for audit record BEFORE deletion ---
         full_name = f"{user.first_name} {user.last_name}".strip() or user.username
         audit_details = {
             'username': user.username,
@@ -399,12 +439,9 @@ class UserDeleteView(APIView):
             'deleted_by': request.user.username,
         }
 
-        # --- 5. Atomic hard deletion with ProtectedError guard ---
+        # --- 6. Atomic hard deletion with ProtectedError guard ---
         try:
             with transaction.atomic():
-                # Write the audit record inside the transaction so a rollback
-                # removes it too — we do NOT want a USER_DELETED entry when
-                # deletion fails.
                 from apps.audit.models import AuditEvent
                 ip = (
                     request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
@@ -420,8 +457,6 @@ class UserDeleteView(APIView):
                 )
                 user.delete()
         except Exception as exc:
-            # Catches ProtectedError, IntegrityError, or any other DB-level
-            # protection. The transaction is rolled back; user record is intact.
             return Response(
                 {
                     'error': (
@@ -434,4 +469,141 @@ class UserDeleteView(APIView):
             )
 
         return Response({'message': f"User account '{full_name}' ({audit_details['username']}) deleted successfully."})
+
+
+class RoleTemplateListView(APIView):
+    """
+    List role templates and default capabilities.
+    Accessible to users with CanManageUsers capability (SUPER_ADMIN, MAIN_OFFICER, SYS_ADMIN).
+    """
+    permission_classes = [CanManageUsers]
+
+    def get(self, request):
+        templates_by_role = {t.role: t for t in RolePermissionTemplate.objects.all()}
+        results = []
+        for role_code, role_label in UserRole.choices:
+            template = templates_by_role.get(role_code)
+            if template:
+                serializer = RolePermissionTemplateSerializer(template)
+                results.append(serializer.data)
+            else:
+                user_count = User.objects.filter(role=role_code).count()
+                results.append({
+                    'id': None,
+                    'role': role_code,
+                    'role_display': role_label,
+                    'description': '',
+                    'permissions': ROLE_DEFAULT_PERMISSIONS.get(role_code, []),
+                    'user_count': user_count,
+                    'updated_at': None,
+                    'updated_by_name': '',
+                })
+
+        return Response({
+            'results': results,
+            'canonical_permissions': CANONICAL_PERMISSIONS,
+        })
+
+
+class RoleTemplateDetailView(APIView):
+    """
+    Retrieve or update role default permissions template.
+    Only SUPER_ADMIN may update templates (enforced with IsSuperAdmin permission).
+    """
+    def get_permissions(self):
+        if self.request.method in ['PUT', 'PATCH']:
+            return [IsSuperAdmin()]
+        return [CanManageUsers()]
+
+    def get(self, request, role):
+        role_upper = role.upper()
+        if role_upper not in UserRole.values:
+            return Response({'error': f"Invalid operational role '{role}'."}, status=status.HTTP_404_NOT_FOUND)
+
+        template = RolePermissionTemplate.objects.filter(role=role_upper).first()
+        if not template:
+            template = RolePermissionTemplate(
+                role=role_upper,
+                permissions=ROLE_DEFAULT_PERMISSIONS.get(role_upper, [])
+            )
+        serializer = RolePermissionTemplateSerializer(template)
+        return Response(serializer.data)
+
+    def put(self, request, role):
+        return self._update_template(request, role)
+
+    def patch(self, request, role):
+        return self._update_template(request, role)
+
+    def _update_template(self, request, role):
+        role_upper = role.upper()
+        if role_upper not in UserRole.values:
+            return Response({'error': f"Invalid operational role '{role}'."}, status=status.HTTP_404_NOT_FOUND)
+
+        raw_permissions = request.data.get('permissions')
+        if hasattr(request.data, 'getlist') and not isinstance(raw_permissions, list):
+            getlist_val = request.data.getlist('permissions')
+            if getlist_val:
+                raw_permissions = getlist_val
+
+        if raw_permissions is None or not isinstance(raw_permissions, list):
+            return Response({'error': 'Permissions must be provided as a list of strings.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        invalid_perms = [p for p in raw_permissions if p not in CANONICAL_PERMISSIONS]
+        if invalid_perms:
+            return Response(
+                {'error': f"Invalid permission codename(s): {', '.join(invalid_perms)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        template, _ = RolePermissionTemplate.objects.get_or_create(
+            role=role_upper,
+            defaults={'permissions': ROLE_DEFAULT_PERMISSIONS.get(role_upper, [])}
+        )
+
+        old_perms = set(template.permissions or [])
+        new_perms = set(raw_permissions)
+
+        added = sorted(list(new_perms - old_perms))
+        removed = sorted(list(old_perms - new_perms))
+
+        template.permissions = sorted(list(new_perms))
+        if 'description' in request.data:
+            template.description = str(request.data['description']).strip()
+        template.updated_by = request.user
+        template.save()
+
+        affected_count = User.objects.filter(role=role_upper).count()
+
+        # Audit logging: ROLE_TEMPLATE_UPDATED
+        try:
+            from apps.audit.models import AuditEvent
+            ip = (
+                request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
+                or request.META.get('REMOTE_ADDR')
+            ) or None
+            AuditEvent.objects.create(
+                actor=request.user,
+                action='ROLE_TEMPLATE_UPDATED',
+                target_model='RolePermissionTemplate',
+                target_id=role_upper,
+                details={
+                    'role': role_upper,
+                    'added': added,
+                    'removed': removed,
+                    'permissions': template.permissions,
+                    'affected_users_count': affected_count,
+                },
+                ip_address=ip,
+            )
+        except Exception:
+            pass
+
+        serializer = RolePermissionTemplateSerializer(template)
+        resp_data = serializer.data
+        resp_data['added'] = added
+        resp_data['removed'] = removed
+        resp_data['affected_users_count'] = affected_count
+        resp_data['message'] = f"Default permissions for {template.get_role_display()} updated successfully."
+        return Response(resp_data)
 

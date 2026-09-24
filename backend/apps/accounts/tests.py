@@ -1168,5 +1168,196 @@ class ZonedSysAdminJurisdictionRBACTests(TestCase):
         self.assertEqual(res_search.data['count'], 0)
 
 
+class SuperAdminAndRoleTemplatesTests(TestCase):
+    def setUp(self):
+        from apps.audit.models import AuditEvent
+        from apps.accounts.models import RolePermissionTemplate
+        self.client = APIClient()
+
+        # Create SUPER_ADMIN SuchithSara
+        self.super_admin = User.objects.create_user(
+            username='SuchithSara',
+            first_name='Suchith',
+            last_name='Sara',
+            password='SuperPassword123!',
+            role=UserRole.SUPER_ADMIN,
+        )
+
+        # Create another global MAIN_OFFICER
+        self.main_officer = User.objects.create_user(
+            username='main_headquarters',
+            password='Password123!',
+            role=UserRole.MAIN_OFFICER,
+        )
+
+        # Create SYS_ADMIN in Charminar
+        self.sys_admin_cmr = User.objects.create_user(
+            username='sys_admin_cmr',
+            password='Password123!',
+            role=UserRole.SYS_ADMIN,
+            zone='Charminar',
+        )
+
+        # Create Officers in different zones
+        self.user_cmr = User.objects.create_user(
+            username='pc_cmr_test',
+            password='Password123!',
+            role=UserRole.CONSTABLE,
+            zone='Charminar',
+            police_station='Charminar',
+        )
+        self.user_sec = User.objects.create_user(
+            username='pc_sec_test',
+            password='Password123!',
+            role=UserRole.CONSTABLE,
+            zone='Secunderabad',
+            police_station='Amberpet',
+        )
+
+    def test_super_admin_has_unrestricted_global_access(self):
+        self.client.force_authenticate(user=self.super_admin)
+        res = self.client.get('/api/v1/auth/users/')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertIn('pc_cmr_test', usernames)
+        self.assertIn('pc_sec_test', usernames)
+
+    def test_super_admin_can_create_any_role_including_super_admin(self):
+        self.client.force_authenticate(user=self.super_admin)
+        res = self.client.post('/api/v1/auth/users/', {
+            'username': 'second_super_admin',
+            'password': 'Password123!',
+            'role': UserRole.SUPER_ADMIN,
+        })
+        self.assertEqual(res.status_code, 201)
+        created = User.objects.get(username='second_super_admin')
+        self.assertEqual(created.role, UserRole.SUPER_ADMIN)
+
+    def test_non_super_admin_cannot_create_super_admin(self):
+        # MAIN_OFFICER attempt
+        self.client.force_authenticate(user=self.main_officer)
+        res_main = self.client.post('/api/v1/auth/users/', {
+            'username': 'illegal_super_from_main',
+            'password': 'Password123!',
+            'role': UserRole.SUPER_ADMIN,
+        })
+        self.assertEqual(res_main.status_code, 400)
+        self.assertIn('role', res_main.data)
+
+        # SYS_ADMIN attempt
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res_sys = self.client.post('/api/v1/auth/users/', {
+            'username': 'illegal_super_from_sys',
+            'password': 'Password123!',
+            'role': UserRole.SUPER_ADMIN,
+            'zone': 'Charminar',
+            'police_station': 'Charminar',
+        })
+        self.assertEqual(res_sys.status_code, 400)
+
+    def test_sys_admin_cannot_create_main_officer(self):
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res = self.client.post('/api/v1/auth/users/', {
+            'username': 'illegal_main_from_sys',
+            'password': 'Password123!',
+            'role': UserRole.MAIN_OFFICER,
+            'zone': 'Charminar',
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('role', res.data)
+
+    def test_cannot_demote_or_delete_or_disable_last_super_admin(self):
+        self.client.force_authenticate(user=self.super_admin)
+        
+        # Demote attempt
+        demote_res = self.client.patch(f'/api/v1/auth/users/{self.super_admin.id}/', {
+            'role': UserRole.MAIN_OFFICER,
+        })
+        self.assertEqual(demote_res.status_code, 400)
+        self.super_admin.refresh_from_db()
+        self.assertEqual(self.super_admin.role, UserRole.SUPER_ADMIN)
+
+        # Disable attempt via toggle-active
+        disable_res = self.client.post(f'/api/v1/auth/users/{self.super_admin.id}/toggle-active/')
+        self.assertEqual(disable_res.status_code, 400)
+        self.super_admin.refresh_from_db()
+        self.assertTrue(self.super_admin.is_active)
+
+        # Hard delete attempt
+        delete_res = self.client.delete(f'/api/v1/auth/users/{self.super_admin.id}/delete/')
+        self.assertEqual(delete_res.status_code, 400)
+        self.assertTrue(User.objects.filter(username='SuchithSara').exists())
+
+    def test_role_change_by_super_admin_is_audited(self):
+        from apps.audit.models import AuditEvent
+        self.client.force_authenticate(user=self.super_admin)
+        res = self.client.patch(f'/api/v1/auth/users/{self.user_cmr.id}/', {
+            'role': UserRole.SHO,
+            'police_station': 'Charminar',
+        })
+        self.assertEqual(res.status_code, 200)
+        self.user_cmr.refresh_from_db()
+        self.assertEqual(self.user_cmr.role, UserRole.SHO)
+
+        # Audit event checked
+        event = AuditEvent.objects.filter(action='ROLE_CHANGED', target_id=str(self.user_cmr.id)).first()
+        self.assertIsNotNone(event)
+        self.assertEqual(event.details['previous_role'], UserRole.CONSTABLE)
+        self.assertEqual(event.details['new_role'], UserRole.SHO)
+
+    def test_role_templates_list_and_update(self):
+        from apps.audit.models import AuditEvent
+        self.client.force_authenticate(user=self.super_admin)
+
+        # List templates
+        list_res = self.client.get('/api/v1/auth/role-templates/')
+        self.assertEqual(list_res.status_code, 200)
+        self.assertIn('results', list_res.data)
+        self.assertIn('canonical_permissions', list_res.data)
+        roles_in_list = [r['role'] for r in list_res.data['results']]
+        self.assertIn('SUPER_ADMIN', roles_in_list)
+        self.assertIn('SYS_ADMIN', roles_in_list)
+
+        # Non-super admin cannot modify templates
+        self.client.force_authenticate(user=self.main_officer)
+        unauth_update = self.client.put('/api/v1/auth/role-templates/SYS_ADMIN/', {
+            'permissions': ['view_dashboard'],
+        }, format='json')
+        self.assertEqual(unauth_update.status_code, 403)
+
+        # Super admin CAN modify templates
+        self.client.force_authenticate(user=self.super_admin)
+        new_perms = ['view_dashboard', 'view_live_map', 'view_reports']
+        update_res = self.client.put('/api/v1/auth/role-templates/SYS_ADMIN/', {
+            'permissions': new_perms,
+            'description': 'Updated SYS_ADMIN default capabilities',
+        }, format='json')
+        self.assertEqual(update_res.status_code, 200)
+        self.assertEqual(update_res.data['permissions'], sorted(new_perms))
+        self.assertIn('added', update_res.data)
+        self.assertIn('removed', update_res.data)
+
+        # Audit event verified
+        audit = AuditEvent.objects.filter(action='ROLE_TEMPLATE_UPDATED', target_id='SYS_ADMIN').first()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit.details['role'], 'SYS_ADMIN')
+        self.assertIn('view_dashboard', audit.details['permissions'])
+
+    def test_custom_permissions_privilege_escalation_blocked(self):
+        # SYS_ADMIN cannot grant 'manage_role_templates'
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res = self.client.post('/api/v1/auth/users/', {
+            'username': 'escalated_user',
+            'password': 'Password123!',
+            'role': UserRole.CONSTABLE,
+            'zone': 'Charminar',
+            'police_station': 'Charminar',
+            'custom_permissions': ['manage_role_templates'],
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('custom_permissions', res.data)
+
+
+
 
 

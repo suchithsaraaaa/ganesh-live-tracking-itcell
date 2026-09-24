@@ -155,7 +155,7 @@ class IdolDetailSerializer(serializers.ModelSerializer):
         if not request or not request.user.is_authenticated:
             return None
         # Only SHO and above can view contact phone numbers
-        if request.user.role in [UserRole.MAIN_OFFICER, UserRole.ACP, UserRole.SHO]:
+        if request.user.role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN, UserRole.ACP, UserRole.SHO]:
             raw = obj.raw_metadata or {}
             return {
                 'mobile_no': raw.get('mobile_no', ''),

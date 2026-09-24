@@ -4,6 +4,7 @@ from .models import User, UserRole, CANONICAL_PERMISSIONS
 
 class UserSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
     permissions = serializers.SerializerMethodField()
 
     class Meta:
@@ -15,6 +16,7 @@ class UserSerializer(serializers.ModelSerializer):
             'first_name',
             'last_name',
             'role',
+            'role_display',
             'police_id',
             'zone',
             'division',
@@ -32,6 +34,47 @@ class UserSerializer(serializers.ModelSerializer):
 
     def get_permissions(self, obj) -> list[str]:
         return obj.get_effective_permissions()
+
+
+class RolePermissionTemplateSerializer(serializers.ModelSerializer):
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+    user_count = serializers.SerializerMethodField()
+    updated_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = None  # Loaded lazily or via model reference
+        fields = [
+            'id',
+            'role',
+            'role_display',
+            'description',
+            'permissions',
+            'user_count',
+            'updated_at',
+            'updated_by_name',
+        ]
+        read_only_fields = ['id', 'role_display', 'user_count', 'updated_at', 'updated_by_name']
+
+    def __init__(self, *args, **kwargs):
+        from .models import RolePermissionTemplate
+        self.Meta.model = RolePermissionTemplate
+        super().__init__(*args, **kwargs)
+
+    def get_user_count(self, obj) -> int:
+        return User.objects.filter(role=obj.role).count()
+
+    def get_updated_by_name(self, obj) -> str:
+        if obj.updated_by:
+            return obj.updated_by.get_full_name() or obj.updated_by.username
+        return ''
+
+    def validate_permissions(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Permissions must be a list of strings.")
+        invalid = [p for p in value if p not in CANONICAL_PERMISSIONS]
+        if invalid:
+            raise serializers.ValidationError(f"Invalid permission codenames: {', '.join(invalid)}")
+        return value
 
 
 class UserCreateUpdateSerializer(serializers.ModelSerializer):
@@ -80,15 +123,17 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
 
         request = self.context.get('request')
         caller = request.user if request and request.user.is_authenticated else None
+        caller_is_super = bool(caller and (caller.is_superuser or caller.role == UserRole.SUPER_ADMIN))
         caller_zone = (getattr(caller, 'zone', '') or '').strip() if caller else ''
         is_global_admin = bool(
             caller and (
                 caller.is_superuser or
+                caller.role == UserRole.SUPER_ADMIN or
                 (caller.role == UserRole.MAIN_OFFICER and not caller_zone)
             )
         )
 
-        # Determine effective role
+        # Determine effective target role
         role = attrs.get('role', self.instance.role if self.instance else UserRole.CONSTABLE)
         
         # Determine effective zone and police_station
@@ -102,17 +147,69 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
         errors = {}
 
         # -----------------------------------------------------------------
-        # Scope Enforcement for Zone-Scoped Administrators (SYS_ADMIN / MAIN_OFFICER with zone)
+        # 1. SUPER_ADMIN Role & Account Protection Guards
+        # -----------------------------------------------------------------
+        # Only SUPER_ADMIN (or superuser) can assign SUPER_ADMIN role
+        if role == UserRole.SUPER_ADMIN and not caller_is_super:
+            errors['role'] = ['Only Super Administrators can create or assign the Super Admin role.']
+
+        # Only SUPER_ADMIN (or superuser) can modify an existing SUPER_ADMIN account
+        if self.instance and self.instance.role == UserRole.SUPER_ADMIN and not caller_is_super:
+            errors['detail'] = ['Only Super Administrators can modify a Super Admin account.']
+
+        # Demotion guard: Cannot demote the last active Super Admin
+        if self.instance and self.instance.role == UserRole.SUPER_ADMIN and role != UserRole.SUPER_ADMIN:
+            active_super_count = User.objects.filter(role=UserRole.SUPER_ADMIN, is_active=True).exclude(pk=self.instance.pk).count()
+            if active_super_count < 1:
+                errors['role'] = ['Cannot demote the last active Super Administrator. At least one active Super Admin must exist.']
+
+        # Deactivation guard: Cannot disable the last active Super Admin
+        if self.instance and self.instance.role == UserRole.SUPER_ADMIN and attrs.get('is_active') is False:
+            active_super_count = User.objects.filter(role=UserRole.SUPER_ADMIN, is_active=True).exclude(pk=self.instance.pk).count()
+            if active_super_count < 1:
+                errors['is_active'] = ['Cannot disable the last active Super Administrator. At least one active Super Admin must exist.']
+
+        # Self-modification guard for caller: caller cannot alter their own role
+        if self.instance and caller and self.instance.id == caller.id:
+            if 'role' in attrs and attrs['role'] != self.instance.role:
+                errors['role'] = ['Cannot modify your own administrative role.']
+
+        # -----------------------------------------------------------------
+        # 2. SYS_ADMIN Hierarchy & Scope Guards
+        # -----------------------------------------------------------------
+        if caller and caller.role == UserRole.SYS_ADMIN and not caller.is_superuser:
+            if role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER]:
+                errors['role'] = [f"System Administrators cannot assign or manage '{role}' accounts."]
+
+        # -----------------------------------------------------------------
+        # 3. Custom Permissions Privilege Escalation Guard
+        # -----------------------------------------------------------------
+        if 'custom_permissions' in attrs and attrs['custom_permissions']:
+            if not caller_is_super:
+                for sensitive_perm in ['manage_role_templates', 'manage_roles']:
+                    if sensitive_perm in attrs['custom_permissions']:
+                        errors['custom_permissions'] = [
+                            f"Permission '{sensitive_perm}' can only be granted by a Super Administrator."
+                        ]
+                        break
+                if caller and 'custom_permissions' not in errors:
+                    caller_perms = set(caller.get_effective_permissions())
+                    unauthorized = [p for p in attrs['custom_permissions'] if p not in caller_perms]
+                    if unauthorized:
+                        errors['custom_permissions'] = [
+                            f"Cannot grant capabilities exceeding your own authority: {', '.join(unauthorized)}"
+                        ]
+
+        # -----------------------------------------------------------------
+        # 4. Scope Enforcement for Zone-Scoped Administrators (SYS_ADMIN / Zoned MAIN_OFFICER)
         # -----------------------------------------------------------------
         if caller and not is_global_admin and caller_zone:
-            # 1. Self-protection: caller cannot alter their own role or zone jurisdiction
+            # Self-protection: caller cannot alter their own assigned zone
             if self.instance and self.instance.id == caller.id:
                 if 'zone' in attrs and (attrs['zone'] or '').strip().lower() != caller_zone.lower():
                     errors['zone'] = ['Cannot modify your own assigned zone jurisdiction.']
-                if 'role' in attrs and attrs['role'] != self.instance.role:
-                    errors['role'] = ['Cannot modify your own administrative role.']
 
-            # 2. Target user zone boundary:
+            # Target user zone boundary:
             if not self.instance:
                 # Creating new user: target zone MUST match caller's zone
                 if 'zone' in attrs and (attrs['zone'] or '').strip():
@@ -139,7 +236,7 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
                     else:
                         attrs['zone'] = caller_zone
 
-            # 3. Police Station scope validation: police station must belong to caller's zone
+            # Police Station scope validation: police station must belong to caller's zone
             if police_station and PoliceStationBoundary.objects.exists():
                 ps_obj = PoliceStationBoundary.objects.filter(ps_name__iexact=police_station).first()
                 if ps_obj and ps_obj.zone.strip().lower() != caller_zone.lower():
@@ -148,6 +245,7 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
                         f"outside your assigned zone '{caller_zone}'."
                     ]
 
+        # Station / Zone validations by role
         if role == UserRole.CONSTABLE:
             if not zone:
                 errors['zone'] = ['Zone is required for Constable / Ground Staff accounts.']
@@ -201,12 +299,63 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
         return user
 
     def update(self, instance, validated_data):
+        request = self.context.get('request')
         password = validated_data.pop('password', None)
+
+        old_role = instance.role
+        old_custom = list(instance.custom_permissions or [])
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
+
+        # Handle password update
+        password_changed = False
         if password and str(password).strip():
             instance.set_password(str(password).strip())
+            password_changed = True
+
         instance.save()
+
+        new_role = instance.role
+        new_custom = list(instance.custom_permissions or [])
+
+        from apps.accounts.views import _log_account_event
+        if password_changed:
+            _log_account_event(request, 'PASSWORD_RESET', instance)
+
+        if new_role != old_role:
+            _log_account_event(
+                request,
+                'ROLE_CHANGED',
+                instance,
+                extra_details={'previous_role': old_role, 'new_role': new_role}
+            )
+            if new_role == UserRole.SUPER_ADMIN:
+                _log_account_event(
+                    request,
+                    'SUPER_ADMIN_GRANTED',
+                    instance,
+                    extra_details={'previous_role': old_role, 'new_role': new_role}
+                )
+
+        if new_custom != old_custom:
+            added = [p for p in new_custom if p not in old_custom]
+            removed = [p for p in old_custom if p not in new_custom]
+            if added:
+                _log_account_event(
+                    request,
+                    'PERMISSION_OVERRIDE_GRANTED',
+                    instance,
+                    extra_details={'added_permissions': added, 'current_permissions': new_custom}
+                )
+            if removed:
+                _log_account_event(
+                    request,
+                    'PERMISSION_OVERRIDE_REVOKED',
+                    instance,
+                    extra_details={'removed_permissions': removed, 'current_permissions': new_custom}
+                )
+
         return instance
 
 

@@ -24,22 +24,52 @@ import {
   fetchAuthoritativeZones,
 } from '../api/client';
 import { User, UserRole, PoliceStationMaster } from '../types';
-import { useAuth, roleLabel } from '../context/AuthContext';
+import { useAuth, roleLabel, isSuperAdmin } from '../context/AuthContext';
 import { LoadingState, EmptyState, ErrorState } from '../components/shared/States';
 import telanganaPoliceLogo from '../assets/branding/telangana-police-logo.png';
 
 const CANONICAL_PERMISSIONS = [
-  { key: 'view_dashboard', label: 'View Dashboard', desc: 'Access command overview and metrics' },
-  { key: 'view_live_map', label: 'View Live Map', desc: 'Track live processions and marker details' },
-  { key: 'view_idols', label: 'View Idols', desc: 'Browse and search idol registrations' },
-  { key: 'view_journey', label: 'View Journey & Breadcrumbs', desc: 'Historical GPS routes and timestamps' },
-  { key: 'manage_assignments', label: 'Manage Assignments', desc: 'Assign constables to GPIDs' },
-  { key: 'handover_duty', label: 'Handover Duty', desc: 'Execute duty handovers between officers' },
-  { key: 'ingest_telemetry', label: 'Ingest Telemetry', desc: 'Submit live GPS location points' },
-  { key: 'generate_reports', label: 'Generate Reports', desc: 'Create and export PDF reports' },
-  { key: 'view_audit_logs', label: 'View Audit Logs', desc: 'Review administrative and operational audit trail' },
-  { key: 'manage_users', label: 'Manage Users', desc: 'Create, update, and manage officer accounts' },
-  { key: 'manage_geography', label: 'Manage Geography', desc: 'Manage station boundaries and geofencing' },
+  // Dashboard
+  { key: 'view_dashboard', label: 'View Dashboard', desc: 'Access command overview, metrics, and procession cards', category: 'Dashboard' },
+
+  // Idols
+  { key: 'view_idols', label: 'View Idols', desc: 'Browse and search registered Ganesh idols', category: 'Idols' },
+  { key: 'view_gpids', label: 'View GPIDs', desc: 'Authoritative idol identifiers and references', category: 'Idols' },
+  { key: 'view_police_stations', label: 'View Police Stations', desc: 'Inspect police stations and boundary maps', category: 'Idols' },
+  { key: 'view_holding_points', label: 'View Holding Points', desc: 'Inspect holding buffers and queue management points', category: 'Idols' },
+  { key: 'view_visarjan_points', label: 'View Visarjan Points', desc: 'Inspect water body immersion locations and tanks', category: 'Idols' },
+
+  // Live Operations
+  { key: 'view_live_map', label: 'View Live Map', desc: 'Track live processions and marker telemetry', category: 'Live Operations' },
+  { key: 'view_processions', label: 'View Processions', desc: 'Monitor active procession movements and states', category: 'Live Operations' },
+  { key: 'view_journey', label: 'View Journey & Breadcrumbs', desc: 'Historical GPS routes and timestamps', category: 'Live Operations' },
+  { key: 'view_tracking_history', label: 'View Tracking History', desc: 'Detailed GPS session logs and point records', category: 'Live Operations' },
+  { key: 'ingest_telemetry', label: 'Ingest Telemetry', desc: 'Transmit and ingest live GPS location points', category: 'Live Operations' },
+  { key: 'view_officer_locations', label: 'View Officer Locations', desc: 'View field officer coordinates and live telemetry', category: 'Live Operations' },
+
+  // Assignments
+  { key: 'view_assignments', label: 'View Assignments', desc: 'Oversight of officer duties and pairings', category: 'Assignments' },
+  { key: 'assign_field_officers', label: 'Assign Field Officers', desc: 'Pair constables with operational idols', category: 'Assignments' },
+  { key: 'create_assignments', label: 'Create Assignments', desc: 'Initiate new duty assignments', category: 'Assignments' },
+  { key: 'reassign_assignments', label: 'Reassign Officers', desc: 'Transfer duties to alternative officers', category: 'Assignments' },
+  { key: 'manage_assignments', label: 'Manage Assignments', desc: 'Complete assignment lifecycle management', category: 'Assignments' },
+  { key: 'handover_duty', label: 'Handover Duty', desc: 'Execute duty handovers between officers', category: 'Assignments' },
+
+  // Reports
+  { key: 'view_reports', label: 'View Reports', desc: 'Browse generated operational PDF reports', category: 'Reports' },
+  { key: 'generate_reports', label: 'Generate Reports', desc: 'Create and export PDF reports', category: 'Reports' },
+  { key: 'export_reports', label: 'Export Reports', desc: 'Download CSV and PDF data exports', category: 'Reports' },
+
+  // System & Audits
+  { key: 'view_audit_logs', label: 'View Audit Logs', desc: 'Review administrative and operational audit trail', category: 'System & Audits' },
+  { key: 'view_alerts', label: 'View Alerts', desc: 'Receive geofence and stoppage alerts', category: 'System & Audits' },
+  { key: 'manage_geography', label: 'Manage Geography', desc: 'Manage station boundaries and geofencing', category: 'System & Audits' },
+
+  // User & Role Management
+  { key: 'manage_users', label: 'Manage Users', desc: 'Create, update, and manage officer accounts', category: 'User Management' },
+  { key: 'manage_permissions', label: 'Manage Permissions', desc: 'Assign granular user capability overrides', category: 'User Management' },
+  { key: 'manage_roles', label: 'Manage Roles', desc: 'Assign and upgrade user operational roles', category: 'Role Management' },
+  { key: 'manage_role_templates', label: 'Manage Role Templates', desc: 'Global role default capabilities configuration', category: 'Role Management' },
 ];
 
 export const UsersPage: React.FC = () => {
@@ -518,7 +548,9 @@ export const UsersPage: React.FC = () => {
                 className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent cursor-pointer"
               >
                 <option value="ALL">All Roles / Levels</option>
+                <option value="SUPER_ADMIN">Super Administrator</option>
                 <option value="MAIN_OFFICER">Main Officer / Admin</option>
+                <option value="SYS_ADMIN">System Admin</option>
                 <option value="ACP">ACP / Senior Officer</option>
                 <option value="SHO">SHO / Station Officer</option>
                 <option value="CONSTABLE">Constable / Ground Staff</option>
@@ -654,8 +686,12 @@ export const UsersPage: React.FC = () => {
                     <div className="w-36">
                       <span
                         className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${
-                          u.role === 'MAIN_OFFICER'
+                          u.role === 'SUPER_ADMIN'
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold'
+                            : u.role === 'MAIN_OFFICER'
                             ? 'bg-accent/15 text-accent border-accent/30'
+                            : (u.role as string) === 'SYS_ADMIN'
+                            ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
                             : u.role === 'ACP'
                             ? 'bg-status-active/15 text-status-active border-status-active/30'
                             : u.role === 'SHO'
@@ -705,32 +741,58 @@ export const UsersPage: React.FC = () => {
                     <div className="w-36 flex items-center justify-end space-x-1">
                       {(() => {
                         const isSelf = currentUser?.id === u.id || currentUser?.username === u.username;
+                        const isTargetSuper = u.role === 'SUPER_ADMIN';
+                        const callerIsSuper = isSuperAdmin(currentUser);
+                        const canEditTarget = !isTargetSuper || callerIsSuper;
+
                         return (
                           <>
                             <button
-                              onClick={() => openEditModal(u)}
-                              title="Edit Officer & Permissions"
-                              className="p-1.5 rounded hover:bg-elevated-2 text-text-tertiary hover:text-text-primary transition-colors cursor-pointer"
+                              onClick={() => canEditTarget && openEditModal(u)}
+                              disabled={!canEditTarget}
+                              title={!canEditTarget ? "Only Super Administrators can edit a Super Admin account." : "Edit Officer & Permissions"}
+                              className={`p-1.5 rounded transition-colors ${
+                                !canEditTarget
+                                  ? 'opacity-30 cursor-not-allowed text-text-tertiary'
+                                  : 'hover:bg-elevated-2 text-text-tertiary hover:text-text-primary cursor-pointer'
+                              }`}
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
                             <button
-                              onClick={() => handleToggleActive(u)}
-                              title={u.is_active ? 'Disable Account' : 'Enable Account'}
-                              className={`p-1.5 rounded hover:bg-elevated-2 transition-colors cursor-pointer ${
-                                u.is_active
-                                  ? 'text-status-critical hover:text-status-critical'
-                                  : 'text-status-active hover:text-status-active'
+                              onClick={() => canEditTarget && !isSelf && handleToggleActive(u)}
+                              disabled={!canEditTarget || isSelf}
+                              title={
+                                isSelf
+                                  ? "Cannot disable your own administrative account."
+                                  : !canEditTarget
+                                  ? "Only Super Administrators can disable a Super Admin account."
+                                  : u.is_active
+                                  ? 'Disable Account'
+                                  : 'Enable Account'
+                              }
+                              className={`p-1.5 rounded transition-colors ${
+                                !canEditTarget || isSelf
+                                  ? 'opacity-30 cursor-not-allowed text-text-tertiary'
+                                  : u.is_active
+                                  ? 'hover:bg-elevated-2 text-status-critical hover:text-status-critical cursor-pointer'
+                                  : 'hover:bg-elevated-2 text-status-active hover:text-status-active cursor-pointer'
                               }`}
                             >
                               {u.is_active ? <XCircle className="w-3.5 h-3.5" /> : <CheckCircle className="w-3.5 h-3.5" />}
                             </button>
                             <button
-                              onClick={() => !isSelf && openDeleteModal(u)}
-                              disabled={isSelf}
-                              title={isSelf ? "You cannot delete your own account." : "Permanently Delete Account"}
-                              className={`p-1.5 rounded transition-colors ${
+                              onClick={() => canEditTarget && !isSelf && openDeleteModal(u)}
+                              disabled={!canEditTarget || isSelf}
+                              title={
                                 isSelf
+                                  ? "You cannot delete your own account."
+                                  : !canEditTarget
+                                  ? "Only Super Administrators can delete a Super Admin account."
+                                  : "Permanently Delete Account"
+                              }
+                              className={`p-1.5 rounded transition-colors ${
+                                !canEditTarget || isSelf
                                   ? 'opacity-30 cursor-not-allowed text-text-tertiary'
                                   : 'hover:bg-status-critical-soft text-status-critical hover:opacity-80 cursor-pointer'
                               }`}
@@ -858,12 +920,21 @@ export const UsersPage: React.FC = () => {
                   <select
                     value={formData.role}
                     onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
+                    disabled={modalMode === 'edit' && selectedUser?.role === 'SUPER_ADMIN' && !isSuperAdmin(currentUser)}
                     className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer"
                   >
                     <option value="CONSTABLE">CONSTABLE (Ground Staff)</option>
                     <option value="SHO">SHO (Station Officer)</option>
                     <option value="ACP">ACP (Senior Officer)</option>
-                    <option value="MAIN_OFFICER">MAIN_OFFICER (System Admin)</option>
+                    {currentUser?.role !== 'SYS_ADMIN' && (
+                      <>
+                        <option value="SYS_ADMIN">SYS_ADMIN (Zone Admin)</option>
+                        <option value="MAIN_OFFICER">MAIN_OFFICER (Headquarters Command)</option>
+                      </>
+                    )}
+                    {isSuperAdmin(currentUser) && (
+                      <option value="SUPER_ADMIN">SUPER_ADMIN (Super Administrator)</option>
+                    )}
                   </select>
                 </div>
 
@@ -974,7 +1045,9 @@ export const UsersPage: React.FC = () => {
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-base p-3 rounded-md border border-border-subtle max-h-48 overflow-y-auto">
-                  {CANONICAL_PERMISSIONS.map((perm) => {
+                  {CANONICAL_PERMISSIONS
+                    .filter((perm) => isSuperAdmin(currentUser) || (perm.key !== 'manage_role_templates' && perm.key !== 'manage_roles'))
+                    .map((perm) => {
                     const isChecked = formData.custom_permissions.includes(perm.key);
                     return (
                       <label

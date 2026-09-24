@@ -7,7 +7,9 @@ from .views import (
     UserDetailView,
     UserToggleActiveView,
     UserDeleteView,
-    AssignableOfficerDirectoryView
+    AssignableOfficerDirectoryView,
+    RoleTemplateListView,
+    RoleTemplateDetailView,
 )
 
 urlpatterns = [
@@ -19,4 +21,7 @@ urlpatterns = [
     path('users/<int:pk>/toggle-active/', UserToggleActiveView.as_view(), name='auth-users-toggle-active'),
     path('users/<int:pk>/delete/', UserDeleteView.as_view(), name='auth-users-delete'),
     path('officers/', AssignableOfficerDirectoryView.as_view(), name='auth-officers-directory'),
+    path('role-templates/', RoleTemplateListView.as_view(), name='auth-role-templates-list'),
+    path('role-templates/<str:role>/', RoleTemplateDetailView.as_view(), name='auth-role-templates-detail'),
 ]
+
