@@ -25,7 +25,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings.dev')
 django.setup()
 
 from django.db import connection, transaction
-from apps.accounts.models import User, Role
+from apps.accounts.models import User, UserRole
 from apps.idols.models import Idol, ProcessionState, GeocodingConfidence
 from apps.assignments.models import Assignment
 from apps.tracking.models import TrackingSession, TrackingSessionStatus, LocationPoint
@@ -46,7 +46,7 @@ def seed():
         admin, _ = User.objects.get_or_create(
             username='loadtest_admin',
             defaults={
-                'role': Role.MAIN_OFFICER,
+                'role': UserRole.MAIN_OFFICER,
                 'email': 'loadtest_admin@police.gov.in',
                 'police_id': 'TS-HQ-0001',
                 'phone_number': '9999900000',
@@ -67,7 +67,7 @@ def seed():
             sho, _ = User.objects.get_or_create(
                 username=f'loadtest_sho_{i+1:02d}',
                 defaults={
-                    'role': Role.SHO,
+                    'role': UserRole.SHO,
                     'police_station': s_name,
                     'zone': 'Central Zone' if i < 10 else 'South Zone',
                     'police_id': f'TS-SHO-{i+1:03d}',
@@ -85,7 +85,7 @@ def seed():
             c, _ = User.objects.get_or_create(
                 username=f'loadtest_pc_{i:03d}',
                 defaults={
-                    'role': Role.CONSTABLE,
+                    'role': UserRole.CONSTABLE,
                     'police_station': ps,
                     'zone': 'Central Zone' if (i % 2 == 0) else 'South Zone',
                     'police_id': f'TS-PC-{i:04d}',
