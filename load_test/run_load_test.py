@@ -136,15 +136,14 @@ async def authenticate_user(session, base_url, username, password):
         async with session.post(url, json=payload, timeout=15) as resp:
             dur = (time.time() - t0) * 1000
             if resp.status == 200:
-                data = await resp.json()
-                # Django session auth uses sessionid cookie or token
-                token = data.get('token') or data.get('access')
-                return token, dur
-            return None, dur
+                cookies = {k: v.value for k, v in resp.cookies.items()}
+                csrf = cookies.get('csrftoken', '')
+                return cookies, csrf, dur
+            return {}, '', dur
     except Exception as e:
-        return None, 15000
+        return {}, '', 15000
 
-async def simulate_web_user(user_id, base_url, metrics, stop_event, auth_headers):
+async def simulate_web_user(user_id, base_url, metrics, stop_event, auth_headers, cookies):
     """
     Simulates an authenticated web user:
     - 40%: Dashboard / operational monitoring
@@ -167,7 +166,7 @@ async def simulate_web_user(user_id, base_url, metrics, stop_event, auth_headers
     for name, path, weight in endpoints_pool:
         weighted.extend([(name, path)] * weight)
 
-    async with aiohttp.ClientSession(headers=auth_headers) as session:
+    async with aiohttp.ClientSession(headers=auth_headers, cookies=cookies) as session:
         while not stop_event.is_set():
             name, path = random.choice(weighted)
             url = f"{base_url}{path}"
@@ -201,7 +200,7 @@ async def simulate_web_user(user_id, base_url, metrics, stop_event, auth_headers
             # Realistic officer pacing: 1 to 3 seconds think time between user clicks
             await asyncio.sleep(random.uniform(1.0, 3.0))
 
-async def simulate_mobile_device(device_idx, base_url, metrics, stop_event, auth_headers, session_id):
+async def simulate_mobile_device(device_idx, base_url, metrics, stop_event, auth_headers, cookies, session_id):
     """
     Simulates a ground staff mobile device:
     - Sends GPS telemetry breadcrumbs every 3 seconds to /api/v1/tracking/location/
@@ -213,7 +212,7 @@ async def simulate_mobile_device(device_idx, base_url, metrics, stop_event, auth
     step = 0
 
     url = f"{base_url}/api/v1/tracking/location/"
-    async with aiohttp.ClientSession(headers=auth_headers) as session:
+    async with aiohttp.ClientSession(headers=auth_headers, cookies=cookies) as session:
         while not stop_event.is_set():
             step += 1
             # Move slightly north-east along procession corridor
@@ -278,16 +277,18 @@ async def run_stage(stage_num, base_url, admin_user, admin_pass):
     # 1. Authenticate admin / get auth cookie or token
     print("[*] Pre-authenticating test sessions...")
     auth_headers = {}
+    cookies = {}
     async with aiohttp.ClientSession() as setup_session:
         # Test login latency
-        token, login_ms = await authenticate_user(setup_session, base_url, admin_user, admin_pass)
+        cookies, csrf, login_ms = await authenticate_user(setup_session, base_url, admin_user, admin_pass)
         print(f"[+] Admin authentication response time: {login_ms:.2f} ms")
-        if token:
-            auth_headers['Authorization'] = f"Bearer {token}"
+        if csrf:
+            auth_headers['X-CSRFToken'] = csrf
+            auth_headers['Referer'] = base_url
 
         # Fetch active tracking sessions from isolated environment
         try:
-            async with setup_session.get(f"{base_url}/api/v1/tracking/active/", headers=auth_headers) as resp:
+            async with setup_session.get(f"{base_url}/api/v1/tracking/active/", headers=auth_headers, cookies=cookies) as resp:
                 if resp.status == 200:
                     markers = await resp.json()
                     available_session_ids = [
@@ -313,14 +314,14 @@ async def run_stage(stage_num, base_url, admin_user, admin_pass):
     # Spawn Web Users
     print(f"[*] Spawning {num_users} concurrent authenticated web users...")
     for uid in range(num_users):
-        t = asyncio.create_task(simulate_web_user(uid, base_url, metrics, stop_event, auth_headers))
+        t = asyncio.create_task(simulate_web_user(uid, base_url, metrics, stop_event, auth_headers, cookies))
         tasks.append(t)
 
     # Spawn Mobile GPS Devices
     print(f"[*] Spawning {num_sessions} active GPS tracking mobile devices (3s telemetry interval)...")
     for s_idx in range(num_sessions):
         sess_id = available_session_ids[s_idx % len(available_session_ids)]
-        t = asyncio.create_task(simulate_mobile_device(s_idx, base_url, metrics, stop_event, auth_headers, sess_id))
+        t = asyncio.create_task(simulate_mobile_device(s_idx, base_url, metrics, stop_event, auth_headers, cookies, sess_id))
         tasks.append(t)
 
     print(f"[+] All {len(tasks)} concurrent tasks running. Monitoring for {duration} seconds...")
