@@ -112,10 +112,12 @@ class CreateAssignmentSerializer(serializers.Serializer):
         request = self.context.get('request')
         if request and request.user.is_authenticated:
             caller = request.user
-            if not (caller.is_superuser or caller.role == UserRole.MAIN_OFFICER):
-                if caller.role == UserRole.ACP:
-                    if caller.zone and idol.zone and idol.zone.lower() != caller.zone.lower():
-                        raise serializers.ValidationError({'error': 'Idol is outside your ACP zone jurisdiction.'})
+            caller_zone = (caller.zone or '').strip()
+            is_global_admin = caller.is_superuser or (caller.role == UserRole.MAIN_OFFICER and not caller_zone)
+            if not is_global_admin:
+                if caller.role in [UserRole.MAIN_OFFICER, getattr(UserRole, 'SYS_ADMIN', 'SYS_ADMIN'), UserRole.ACP]:
+                    if caller_zone and idol.zone and idol.zone.lower() != caller_zone.lower():
+                        raise serializers.ValidationError({'error': 'Idol is outside your authorized zone jurisdiction.'})
                 elif caller.role == UserRole.SHO:
                     if caller.police_station and idol.police_station and idol.police_station.lower() != caller.police_station.lower():
                         raise serializers.ValidationError({'error': 'Idol is outside your police station jurisdiction.'})

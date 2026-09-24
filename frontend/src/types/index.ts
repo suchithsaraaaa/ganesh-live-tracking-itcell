@@ -1,4 +1,4 @@
-export type UserRole = 'MAIN_OFFICER' | 'ACP' | 'SHO' | 'CONSTABLE';
+export type UserRole = 'MAIN_OFFICER' | 'SYS_ADMIN' | 'ACP' | 'SHO' | 'CONSTABLE';
 
 export type ProcessionState =
   | 'NOT_STARTED'

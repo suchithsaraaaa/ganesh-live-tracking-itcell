@@ -894,4 +894,279 @@ class UserManagementFilteringAndAdminPasswordTests(TestCase):
         self.assertEqual(res.status_code, 403)
 
 
+class ZonedSysAdminJurisdictionRBACTests(TestCase):
+    """
+    Production RBAC Verification for Zone-Scoped System Administrators.
+    Verifies that:
+    1. Existing and future SYS_ADMIN accounts with a zone are strictly scoped to that zone.
+    2. Cross-zone operations (view, edit, delete, password reset, toggle active, create) are rejected server-side.
+    3. Global unzoned MAIN_OFFICER and superuser retain city-wide jurisdiction.
+    4. ACP/SHO jurisdiction behaviors are preserved.
+    """
+    def setUp(self):
+        self.client = APIClient()
+
+        # Global Administrators (City-Wide, no zone assigned)
+        self.global_main_officer = User.objects.create_user(
+            username='global_boss',
+            password='Password123!',
+            role=UserRole.MAIN_OFFICER,
+            zone=''
+        )
+        self.superuser = User.objects.create_superuser(
+            username='global_super',
+            password='Password123!',
+            role=UserRole.MAIN_OFFICER,
+            zone=''
+        )
+
+        # Existing Zone-Scoped SYS_ADMIN (Created with role=MAIN_OFFICER and zone)
+        self.sys_admin_cmr = User.objects.create_user(
+            username='sysadmin_charminar',
+            password='Password123!',
+            role=UserRole.MAIN_OFFICER,
+            zone='Charminar'
+        )
+        self.sys_admin_sec = User.objects.create_user(
+            username='sysadmin_secunderabad',
+            password='Password123!',
+            role=UserRole.MAIN_OFFICER,
+            zone='Secunderabad'
+        )
+
+        # Future Zone-Scoped SYS_ADMIN (Created with role=SYS_ADMIN and zone)
+        self.future_sys_admin_cmr = User.objects.create_user(
+            username='future_admin_cmr',
+            password='Password123!',
+            role=UserRole.SYS_ADMIN,
+            zone='Charminar'
+        )
+
+        # Zone 1 Users (Charminar)
+        self.user_cmr_constable = User.objects.create_user(
+            username='cmr_pc_5001',
+            password='Password123!',
+            role=UserRole.CONSTABLE,
+            zone='Charminar',
+            police_station='Charminar',
+            police_id='PC-5001'
+        )
+        self.acp_cmr = User.objects.create_user(
+            username='acp_cmr_5002',
+            password='Password123!',
+            role=UserRole.ACP,
+            zone='Charminar',
+            division='Charminar'
+        )
+        self.sho_cmr = User.objects.create_user(
+            username='sho_cmr_5003',
+            password='Password123!',
+            role=UserRole.SHO,
+            zone='Charminar',
+            police_station='Charminar'
+        )
+
+        # Zone 2 Users (Secunderabad)
+        self.user_sec_constable = User.objects.create_user(
+            username='sec_pc_6001',
+            password='Password123!',
+            role=UserRole.CONSTABLE,
+            zone='Secunderabad',
+            police_station='Amberpet',
+            police_id='PC-6001'
+        )
+
+    # 1. Existing Zone 1 SYS_ADMIN sees only Zone 1 users
+    def test_1_existing_zone_1_sys_admin_sees_only_zone_1_users(self):
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res = self.client.get('/api/v1/auth/users/')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertIn('cmr_pc_5001', usernames)
+        self.assertIn('sysadmin_charminar', usernames)
+        self.assertNotIn('sec_pc_6001', usernames)
+        self.assertNotIn('sysadmin_secunderabad', usernames)
+
+    # 2. Existing Zone 2 SYS_ADMIN sees only Zone 2 users
+    def test_2_existing_zone_2_sys_admin_sees_only_zone_2_users(self):
+        self.client.force_authenticate(user=self.sys_admin_sec)
+        res = self.client.get('/api/v1/auth/users/')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertIn('sec_pc_6001', usernames)
+        self.assertIn('sysadmin_secunderabad', usernames)
+        self.assertNotIn('cmr_pc_5001', usernames)
+        self.assertNotIn('sysadmin_charminar', usernames)
+
+    # 3. Existing Zone 1 SYS_ADMIN cannot retrieve Zone 2 user (404)
+    def test_3_existing_zone_1_sys_admin_cannot_retrieve_zone_2_user(self):
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res = self.client.get(f'/api/v1/auth/users/{self.user_sec_constable.id}/')
+        self.assertEqual(res.status_code, 404)
+
+    # 4. Existing Zone 1 SYS_ADMIN cannot edit Zone 2 user
+    def test_4_existing_zone_1_sys_admin_cannot_edit_zone_2_user(self):
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res = self.client.patch(f'/api/v1/auth/users/{self.user_sec_constable.id}/', {
+            'first_name': 'Hacked'
+        })
+        self.assertEqual(res.status_code, 404)
+        self.user_sec_constable.refresh_from_db()
+        self.assertNotEqual(self.user_sec_constable.first_name, 'Hacked')
+
+    # 5. Existing Zone 1 SYS_ADMIN cannot delete Zone 2 user
+    def test_5_existing_zone_1_sys_admin_cannot_delete_zone_2_user(self):
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res = self.client.delete(f'/api/v1/auth/users/{self.user_sec_constable.id}/delete/')
+        self.assertEqual(res.status_code, 404)
+        self.assertTrue(User.objects.filter(id=self.user_sec_constable.id).exists())
+
+    # 6. Existing Zone 1 SYS_ADMIN cannot reset Zone 2 password
+    def test_6_existing_zone_1_sys_admin_cannot_reset_zone_2_password(self):
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res = self.client.patch(f'/api/v1/auth/users/{self.user_sec_constable.id}/', {
+            'password': 'AttackerNewPassword123!'
+        })
+        self.assertEqual(res.status_code, 404)
+        from django.contrib.auth import authenticate
+        self.assertIsNone(authenticate(username='sec_pc_6001', password='AttackerNewPassword123!'))
+        self.assertIsNotNone(authenticate(username='sec_pc_6001', password='Password123!'))
+
+    # 7. Existing Zone 1 SYS_ADMIN cannot disable Zone 2 user
+    def test_7_existing_zone_1_sys_admin_cannot_disable_zone_2_user(self):
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res = self.client.delete(f'/api/v1/auth/users/{self.user_sec_constable.id}/')
+        self.assertEqual(res.status_code, 404)
+        self.user_sec_constable.refresh_from_db()
+        self.assertTrue(self.user_sec_constable.is_active)
+
+    # 8. Existing Zone 1 SYS_ADMIN cannot enable Zone 2 user
+    def test_8_existing_zone_1_sys_admin_cannot_enable_zone_2_user(self):
+        self.user_sec_constable.is_active = False
+        self.user_sec_constable.save(update_fields=['is_active'])
+
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res = self.client.post(f'/api/v1/auth/users/{self.user_sec_constable.id}/toggle-active/')
+        self.assertEqual(res.status_code, 404)
+        self.user_sec_constable.refresh_from_db()
+        self.assertFalse(self.user_sec_constable.is_active)
+
+    # 9. Existing Zone 1 SYS_ADMIN cannot change another user's zone to Zone 2
+    def test_9_existing_zone_1_sys_admin_cannot_change_user_zone_to_zone_2(self):
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res = self.client.patch(f'/api/v1/auth/users/{self.user_cmr_constable.id}/', {
+            'zone': 'Secunderabad'
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('zone', res.data)
+        self.user_cmr_constable.refresh_from_db()
+        self.assertEqual(self.user_cmr_constable.zone, 'Charminar')
+
+    # 10. Existing Zone 1 SYS_ADMIN can manage permitted Zone 1 users
+    def test_10_existing_zone_1_sys_admin_can_manage_permitted_zone_1_users(self):
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        # 1. Edit
+        edit_res = self.client.patch(f'/api/v1/auth/users/{self.user_cmr_constable.id}/', {
+            'first_name': 'Ramesh'
+        })
+        self.assertEqual(edit_res.status_code, 200)
+        self.assertEqual(edit_res.data['first_name'], 'Ramesh')
+
+        # 2. Reset password
+        pwd_res = self.client.patch(f'/api/v1/auth/users/{self.user_cmr_constable.id}/', {
+            'password': 'NewPolicePass2026!'
+        })
+        self.assertEqual(pwd_res.status_code, 200)
+        from django.contrib.auth import authenticate
+        self.assertIsNotNone(authenticate(username='cmr_pc_5001', password='NewPolicePass2026!'))
+
+        # 3. Toggle active
+        toggle_res = self.client.post(f'/api/v1/auth/users/{self.user_cmr_constable.id}/toggle-active/')
+        self.assertEqual(toggle_res.status_code, 200)
+        self.assertFalse(toggle_res.data['is_active'])
+
+    # 11. Zone 1 SYS_ADMIN cannot create Zone 2 user
+    def test_11_zone_1_sys_admin_cannot_create_zone_2_user(self):
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        res = self.client.post('/api/v1/auth/users/', {
+            'username': 'illegal_sec_officer',
+            'password': 'Password123!',
+            'role': UserRole.CONSTABLE,
+            'zone': 'Secunderabad',
+            'police_station': 'Amberpet',
+            'police_id': 'PC-9999'
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('zone', res.data)
+        self.assertFalse(User.objects.filter(username='illegal_sec_officer').exists())
+
+    # 12. Future Zone 1 SYS_ADMIN behaves identically
+    def test_12_future_zone_1_sys_admin_behaves_identically(self):
+        self.client.force_authenticate(user=self.future_sys_admin_cmr)
+        # Can see Zone 1
+        res = self.client.get('/api/v1/auth/users/')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertIn('cmr_pc_5001', usernames)
+        self.assertNotIn('sec_pc_6001', usernames)
+
+        # Cannot edit Zone 2
+        patch_res = self.client.patch(f'/api/v1/auth/users/{self.user_sec_constable.id}/', {
+            'first_name': 'Disallowed'
+        })
+        self.assertEqual(patch_res.status_code, 404)
+
+        # Cannot create Zone 2
+        create_res = self.client.post('/api/v1/auth/users/', {
+            'username': 'future_illegal_sec',
+            'password': 'Password123!',
+            'role': UserRole.CONSTABLE,
+            'zone': 'Secunderabad',
+            'police_station': 'Amberpet'
+        })
+        self.assertEqual(create_res.status_code, 400)
+
+    # 13. MAIN_OFFICER behavior remains unchanged (global/city-wide when unzoned)
+    def test_13_global_main_officer_retains_city_wide_authority(self):
+        self.client.force_authenticate(user=self.global_main_officer)
+        res = self.client.get('/api/v1/auth/users/')
+        self.assertEqual(res.status_code, 200)
+        usernames = [u['username'] for u in res.data['results']]
+        self.assertIn('cmr_pc_5001', usernames)
+        self.assertIn('sec_pc_6001', usernames)
+
+        # Can retrieve both
+        r1 = self.client.get(f'/api/v1/auth/users/{self.user_cmr_constable.id}/')
+        r2 = self.client.get(f'/api/v1/auth/users/{self.user_sec_constable.id}/')
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r2.status_code, 200)
+
+    # 14. Existing ACP/SHO behavior remains unchanged
+    def test_14_existing_acp_sho_behavior_remains_unchanged(self):
+        # ACP Charminar cannot manage users unless granted manage_users
+        self.client.force_authenticate(user=self.acp_cmr)
+        res = self.client.get('/api/v1/auth/users/')
+        self.assertEqual(res.status_code, 403)
+
+        # SHO Charminar cannot manage users
+        self.client.force_authenticate(user=self.sho_cmr)
+        res_sho = self.client.get('/api/v1/auth/users/')
+        self.assertEqual(res_sho.status_code, 403)
+
+    # 15. Direct API requests cannot bypass frontend filtering
+    def test_15_direct_api_requests_cannot_bypass_frontend_filtering(self):
+        self.client.force_authenticate(user=self.sys_admin_cmr)
+        # Attempt to bypass scope by passing ?zone=Secunderabad
+        res = self.client.get('/api/v1/auth/users/?zone=Secunderabad')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['count'], 0)
+        self.assertEqual(len(res.data['results']), 0)
+
+        # Attempt to bypass by searching for Zone 2 officer's username
+        res_search = self.client.get('/api/v1/auth/users/?search=sec_pc_6001')
+        self.assertEqual(res_search.status_code, 200)
+        self.assertEqual(res_search.data['count'], 0)
+
+
+
 

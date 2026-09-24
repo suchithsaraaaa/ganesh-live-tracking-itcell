@@ -4,6 +4,7 @@ from django.db import models
 
 class UserRole(models.TextChoices):
     MAIN_OFFICER = 'MAIN_OFFICER', 'Main Officer / System Admin'
+    SYS_ADMIN = 'SYS_ADMIN', 'System Admin'
     ACP = 'ACP', 'ACP / Senior Officer'
     SHO = 'SHO', 'Station House Officer'
     CONSTABLE = 'CONSTABLE', 'Constable / Ground Staff'
@@ -35,6 +36,7 @@ CANONICAL_PERMISSIONS = [
 
 ROLE_DEFAULT_PERMISSIONS = {
     UserRole.MAIN_OFFICER: list(CANONICAL_PERMISSIONS),
+    UserRole.SYS_ADMIN: list(CANONICAL_PERMISSIONS),
     UserRole.ACP: [
         'view_dashboard', 'view_live_map', 'view_gpids', 'view_processions',
         'view_police_stations', 'view_reports', 'view_alerts', 'view_holding_points',

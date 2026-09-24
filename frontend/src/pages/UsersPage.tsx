@@ -52,13 +52,34 @@ export const UsersPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Check if current user is a zone-scoped administrator
+  const isZonedAdmin = useMemo(() => {
+    return !!(
+      currentUser?.zone &&
+      !(currentUser as any).is_superuser &&
+      (currentUser.role === 'MAIN_OFFICER' || (currentUser.role as any) === 'SYS_ADMIN' || currentUser.role === 'ACP')
+    );
+  }, [currentUser]);
+
   // Filters (Backend-driven)
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [selectedZone, setSelectedZone] = useState('All Zones');
+  const [selectedZone, setSelectedZone] = useState(() => {
+    if (currentUser?.zone && !(currentUser as any).is_superuser) {
+      return currentUser.zone;
+    }
+    return 'All Zones';
+  });
   const [selectedStation, setSelectedStation] = useState('All Police Stations');
   const [roleFilter, setRoleFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
+
+  // Keep selectedZone synchronized when current user loads
+  useEffect(() => {
+    if (isZonedAdmin && currentUser?.zone && selectedZone !== currentUser.zone) {
+      setSelectedZone(currentUser.zone);
+    }
+  }, [isZonedAdmin, currentUser?.zone]);
 
   // Password visibility in modal
   const [showPassword, setShowPassword] = useState(false);
@@ -116,13 +137,16 @@ export const UsersPage: React.FC = () => {
 
   // Compute available zones
   const availableZones = useMemo(() => {
+    if (isZonedAdmin && currentUser?.zone) {
+      return [currentUser.zone];
+    }
     if (zones && zones.length > 0) return zones;
     const zSet = new Set<string>();
     policeStations.forEach((ps) => {
       if (ps.zone) zSet.add(ps.zone);
     });
     return Array.from(zSet).sort();
-  }, [zones, policeStations]);
+  }, [isZonedAdmin, currentUser?.zone, zones, policeStations]);
 
   // Compute cascading police stations based on selectedZone
   const availableStations = useMemo(() => {
@@ -168,7 +192,7 @@ export const UsersPage: React.FC = () => {
   const handleClearFilters = () => {
     setSearch('');
     setDebouncedSearch('');
-    setSelectedZone('All Zones');
+    setSelectedZone(isZonedAdmin && currentUser?.zone ? currentUser.zone : 'All Zones');
     setSelectedStation('All Police Stations');
     setRoleFilter('ALL');
     setStatusFilter('ALL');
@@ -216,7 +240,7 @@ export const UsersPage: React.FC = () => {
       role: 'CONSTABLE' as UserRole,
       police_id: '',
       police_station: '',
-      zone: '',
+      zone: isZonedAdmin && currentUser?.zone ? currentUser.zone : '',
       division: '',
       is_active: true,
       custom_permissions: [],
@@ -448,9 +472,10 @@ export const UsersPage: React.FC = () => {
               <select
                 value={selectedZone}
                 onChange={(e) => handleZoneFilterChange(e.target.value)}
-                className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent cursor-pointer"
+                disabled={isZonedAdmin}
+                className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent cursor-pointer disabled:opacity-60"
               >
-                <option value="All Zones">All Zones</option>
+                {!isZonedAdmin && <option value="All Zones">All Zones</option>}
                 {availableZones.map((z) => (
                   <option key={z} value={z}>
                     {z}
@@ -865,13 +890,16 @@ export const UsersPage: React.FC = () => {
                   <select
                     value={formData.zone}
                     onChange={(e) => handleZoneChange(e.target.value)}
-                    required={formData.role === 'CONSTABLE' || formData.role === 'SHO' || formData.role === 'ACP'}
-                    className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer"
+                    disabled={isZonedAdmin}
+                    required={formData.role === 'CONSTABLE' || formData.role === 'SHO' || formData.role === 'ACP' || isZonedAdmin}
+                    className="w-full px-3 py-2 bg-elevated-2 border border-border-default rounded-md text-text-primary text-xs focus:outline-none focus:border-accent cursor-pointer disabled:opacity-60"
                   >
-                    <option value="">
-                      {formData.role === 'MAIN_OFFICER' ? 'None / City Wide' : 'Select Zone...'}
-                    </option>
-                    {zones.map((z) => (
+                    {!isZonedAdmin && (
+                      <option value="">
+                        {formData.role === 'MAIN_OFFICER' ? 'None / City Wide' : 'Select Zone...'}
+                      </option>
+                    )}
+                    {availableZones.map((z) => (
                       <option key={z} value={z}>
                         {z}
                       </option>

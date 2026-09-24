@@ -78,6 +78,16 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         from apps.geography.models import PoliceStationBoundary
 
+        request = self.context.get('request')
+        caller = request.user if request and request.user.is_authenticated else None
+        caller_zone = (getattr(caller, 'zone', '') or '').strip() if caller else ''
+        is_global_admin = bool(
+            caller and (
+                caller.is_superuser or
+                (caller.role == UserRole.MAIN_OFFICER and not caller_zone)
+            )
+        )
+
         # Determine effective role
         role = attrs.get('role', self.instance.role if self.instance else UserRole.CONSTABLE)
         
@@ -90,6 +100,53 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
             police_station = police_station.strip()
 
         errors = {}
+
+        # -----------------------------------------------------------------
+        # Scope Enforcement for Zone-Scoped Administrators (SYS_ADMIN / MAIN_OFFICER with zone)
+        # -----------------------------------------------------------------
+        if caller and not is_global_admin and caller_zone:
+            # 1. Self-protection: caller cannot alter their own role or zone jurisdiction
+            if self.instance and self.instance.id == caller.id:
+                if 'zone' in attrs and (attrs['zone'] or '').strip().lower() != caller_zone.lower():
+                    errors['zone'] = ['Cannot modify your own assigned zone jurisdiction.']
+                if 'role' in attrs and attrs['role'] != self.instance.role:
+                    errors['role'] = ['Cannot modify your own administrative role.']
+
+            # 2. Target user zone boundary:
+            if not self.instance:
+                # Creating new user: target zone MUST match caller's zone
+                if 'zone' in attrs and (attrs['zone'] or '').strip():
+                    if attrs['zone'].strip().lower() != caller_zone.lower():
+                        errors['zone'] = [f"Cannot create accounts outside your assigned zone ('{caller_zone}')."]
+                    else:
+                        attrs['zone'] = caller_zone
+                else:
+                    attrs['zone'] = caller_zone
+                zone = caller_zone
+
+                # Scope escape prevention: A zoned administrator cannot create a global / unzoned admin
+                if role in [UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN]:
+                    attrs['zone'] = caller_zone
+                    zone = caller_zone
+            else:
+                # Updating existing user: cannot transfer across zones or remove zone
+                if 'zone' in attrs:
+                    new_zone = (attrs['zone'] or '').strip()
+                    if new_zone and new_zone.lower() != caller_zone.lower():
+                        errors['zone'] = [f"Cannot transfer accounts to another zone ('{new_zone}')."]
+                    elif not new_zone:
+                        errors['zone'] = ['Cannot remove zone jurisdiction from user account.']
+                    else:
+                        attrs['zone'] = caller_zone
+
+            # 3. Police Station scope validation: police station must belong to caller's zone
+            if police_station and PoliceStationBoundary.objects.exists():
+                ps_obj = PoliceStationBoundary.objects.filter(ps_name__iexact=police_station).first()
+                if ps_obj and ps_obj.zone.strip().lower() != caller_zone.lower():
+                    errors['police_station'] = [
+                        f"Selected police station '{ps_obj.ps_name}' belongs to '{ps_obj.zone}', "
+                        f"outside your assigned zone '{caller_zone}'."
+                    ]
 
         if role == UserRole.CONSTABLE:
             if not zone:

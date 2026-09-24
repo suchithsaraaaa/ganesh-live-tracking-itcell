@@ -135,7 +135,7 @@ class UserListCreateView(APIView):
 
 
     def post(self, request):
-        serializer = UserCreateUpdateSerializer(data=request.data)
+        serializer = UserCreateUpdateSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             user = serializer.save()
             _log_account_event(request, 'USER_CREATED', user)
@@ -146,28 +146,30 @@ class UserListCreateView(APIView):
 class UserDetailView(APIView):
     """
     Retrieve, update, or disable individual users.
-    Restricted to MAIN_OFFICER or users with manage_users capability.
+    Restricted to MAIN_OFFICER, SYS_ADMIN, or users with manage_users capability.
+    Jurisdiction is strictly enforced server-side.
     """
     permission_classes = [CanManageUsers]
 
-    def get_object(self, pk):
+    def get_object(self, pk, request_user):
+        qs = filter_by_jurisdiction(User.objects.all(), request_user)
         try:
-            return User.objects.get(pk=pk)
+            return qs.get(pk=pk)
         except User.DoesNotExist:
             return None
 
     def get(self, request, pk):
-        user = self.get_object(pk)
+        user = self.get_object(pk, request.user)
         if not user:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
         return Response(UserSerializer(user).data)
 
     def patch(self, request, pk):
-        user = self.get_object(pk)
+        user = self.get_object(pk, request.user)
         if not user:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        serializer = UserCreateUpdateSerializer(user, data=request.data, partial=True)
+        serializer = UserCreateUpdateSerializer(user, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             updated_user = serializer.save()
             return Response(UserSerializer(updated_user).data)
@@ -175,7 +177,7 @@ class UserDetailView(APIView):
 
     def delete(self, request, pk):
         # Soft-disable only via this method — true hard deletion is on UserDeleteView.
-        user = self.get_object(pk)
+        user = self.get_object(pk, request.user)
         if not user:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -191,12 +193,14 @@ class UserDetailView(APIView):
 class UserToggleActiveView(APIView):
     """
     Quick toggle for user active/inactive state.
+    Jurisdiction is strictly enforced server-side.
     """
     permission_classes = [CanManageUsers]
 
     def post(self, request, pk):
+        qs = filter_by_jurisdiction(User.objects.all(), request.user)
         try:
-            user = User.objects.get(pk=pk)
+            user = qs.get(pk=pk)
         except User.DoesNotExist:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -219,7 +223,8 @@ class AssignableOfficerDirectoryView(APIView):
     """
     Returns field officers (constables) available for idol assignment.
     Respects jurisdiction:
-    - MAIN_OFFICER: city-wide
+    - MAIN_OFFICER / SYS_ADMIN without zone (or superuser): city-wide
+    - MAIN_OFFICER / SYS_ADMIN with zone: within assigned zone
     - ACP: within ACP's zone/division
     - SHO: within SHO's police station
     Excludes phone numbers to protect officer privacy.
@@ -230,6 +235,8 @@ class AssignableOfficerDirectoryView(APIView):
         caller = request.user
         qs = User.objects.filter(role=UserRole.CONSTABLE, is_active=True).order_by('police_station', 'username')
 
+        user_zone = (caller.zone or '').strip()
+
         # Jurisdiction filter
         if caller.role == UserRole.SHO:
             if caller.police_station:
@@ -237,17 +244,20 @@ class AssignableOfficerDirectoryView(APIView):
             else:
                 qs = qs.none()
         elif caller.role == UserRole.ACP:
-            if caller.zone:
-                qs = qs.filter(zone__iexact=caller.zone)
+            if user_zone:
+                qs = qs.filter(zone__iexact=user_zone)
             elif caller.division:
                 qs = qs.filter(division__iexact=caller.division)
             else:
                 qs = qs.none()
+        elif caller.role in [UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN] and not caller.is_superuser:
+            if user_zone:
+                qs = qs.filter(zone__iexact=user_zone)
 
         # Optional zone filter if authorized
         requested_zone = request.query_params.get('zone')
         if requested_zone:
-            if caller.role == UserRole.ACP and caller.zone and caller.zone.lower() != requested_zone.lower():
+            if not caller.is_superuser and user_zone and user_zone.lower() != requested_zone.strip().lower():
                 return Response({'error': 'Cannot view officers outside your zone jurisdiction.'}, status=status.HTTP_403_FORBIDDEN)
             qs = qs.filter(zone__iexact=requested_zone)
 
@@ -351,9 +361,10 @@ class UserDeleteView(APIView):
     permission_classes = [CanManageUsers]
 
     def delete(self, request, pk):
-        # --- 1. Target existence check ---
+        # --- 1. Target existence check (with strict server-side jurisdiction scoping) ---
+        qs = filter_by_jurisdiction(User.objects.all(), request.user)
         try:
-            user = User.objects.get(pk=pk)
+            user = qs.get(pk=pk)
         except User.DoesNotExist:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
