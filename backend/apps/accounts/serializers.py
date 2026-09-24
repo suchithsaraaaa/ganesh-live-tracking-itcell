@@ -123,13 +123,13 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
 
         request = self.context.get('request')
         caller = request.user if request and request.user.is_authenticated else None
-        caller_is_super = bool(caller and (caller.is_superuser or caller.role == UserRole.SUPER_ADMIN))
+        caller_is_super = bool(caller and caller.role == UserRole.SUPER_ADMIN)
         caller_zone = (getattr(caller, 'zone', '') or '').strip() if caller else ''
         is_global_admin = bool(
             caller and (
-                caller.is_superuser or
                 caller.role == UserRole.SUPER_ADMIN or
-                (caller.role == UserRole.MAIN_OFFICER and not caller_zone)
+                (caller.role == UserRole.MAIN_OFFICER and not caller_zone) or
+                (caller.is_superuser and not caller_zone)
             )
         )
 
@@ -177,7 +177,7 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
         # -----------------------------------------------------------------
         # 2. SYS_ADMIN Hierarchy & Scope Guards
         # -----------------------------------------------------------------
-        if caller and caller.role == UserRole.SYS_ADMIN and not caller.is_superuser:
+        if caller and caller.role == UserRole.SYS_ADMIN and not caller_is_super:
             if role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER]:
                 errors['role'] = [f"System Administrators cannot assign or manage '{role}' accounts."]
 

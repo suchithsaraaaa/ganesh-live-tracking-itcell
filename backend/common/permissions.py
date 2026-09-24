@@ -6,9 +6,12 @@ from apps.accounts.models import UserRole
 
 
 class IsSuperAdmin(permissions.BasePermission):
+    """Allows access strictly to users with the SUPER_ADMIN operational role."""
     def has_permission(self, request, view):
-        return request.user.is_authenticated and (
-            request.user.is_superuser or request.user.role == UserRole.SUPER_ADMIN
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role == UserRole.SUPER_ADMIN
         )
 
 

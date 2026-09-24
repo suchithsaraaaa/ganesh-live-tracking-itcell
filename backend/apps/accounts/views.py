@@ -170,7 +170,7 @@ class UserDetailView(APIView):
         if not user:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        caller_is_super = bool(request.user and (request.user.is_superuser or request.user.role == UserRole.SUPER_ADMIN))
+        caller_is_super = bool(request.user and request.user.role == UserRole.SUPER_ADMIN)
         if user.role == UserRole.SUPER_ADMIN and not caller_is_super:
             return Response({'error': 'Only Super Administrators can modify a Super Admin account.'}, status=status.HTTP_403_FORBIDDEN)
 
@@ -189,7 +189,7 @@ class UserDetailView(APIView):
         if user.id == request.user.id:
             return Response({'error': 'Cannot disable your own administrative account.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        caller_is_super = bool(request.user and (request.user.is_superuser or request.user.role == UserRole.SUPER_ADMIN))
+        caller_is_super = bool(request.user and request.user.role == UserRole.SUPER_ADMIN)
         if user.role == UserRole.SUPER_ADMIN:
             if not caller_is_super:
                 return Response({'error': 'Only Super Administrators can disable a Super Admin account.'}, status=status.HTTP_403_FORBIDDEN)
@@ -220,7 +220,7 @@ class UserToggleActiveView(APIView):
         if user.id == request.user.id and user.is_active:
             return Response({'error': 'Cannot disable your own administrative account.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        caller_is_super = bool(request.user and (request.user.is_superuser or request.user.role == UserRole.SUPER_ADMIN))
+        caller_is_super = bool(request.user and request.user.role == UserRole.SUPER_ADMIN)
         if user.role == UserRole.SUPER_ADMIN:
             if not caller_is_super:
                 return Response({'error': 'Only Super Administrators can modify a Super Admin account.'}, status=status.HTTP_403_FORBIDDEN)
@@ -401,7 +401,7 @@ class UserDeleteView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        caller_is_super = bool(request.user and (request.user.is_superuser or request.user.role == UserRole.SUPER_ADMIN))
+        caller_is_super = bool(request.user and request.user.role == UserRole.SUPER_ADMIN)
 
         # --- 3. Super Admin & Hierarchy Deletion Guards ---
         if user.role == UserRole.SUPER_ADMIN:
@@ -411,7 +411,7 @@ class UserDeleteView(APIView):
             if active_super_count < 1:
                 return Response({'error': 'Cannot delete the last active Super Administrator. At least one active Super Admin must exist.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if request.user.role == UserRole.SYS_ADMIN and not request.user.is_superuser:
+        if request.user.role == UserRole.SYS_ADMIN and not caller_is_super:
             if user.role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER]:
                 return Response({'error': f"System Administrators cannot delete '{user.role}' accounts."}, status=status.HTTP_403_FORBIDDEN)
 
