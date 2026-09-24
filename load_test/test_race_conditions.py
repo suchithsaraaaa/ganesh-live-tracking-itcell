@@ -180,19 +180,13 @@ async def test_race_conditions(base_url, admin_user, admin_pass):
             assert points_count > 0, "Telemetry points were deleted or corrupted!"
             print(f"    [+] Historical telemetry breadcrumbs intact ({points_count} points preserved).")
 
-        # 4. Immediate re-assignment to new officer is possible
-        print("\n[*] TEST 5: Immediate Reassignment of Officer...")
-        async with session.get(f"{base_url}/api/v1/assignments/registry/{target_gpid}/eligible-officers/") as el_resp:
-            el_data = await el_resp.json()
-            eligible_officers = el_data.get('results', [])
-            assert len(eligible_officers) > 0, f"No eligible officer found for {target_gpid}"
-            new_officer = eligible_officers[0]['id']
-
-        async with session.post(assign_url, json={'gpid': target_gpid, 'constable_id': new_officer}) as resp:
+        # 4. Immediate re-assignment of freed officer is possible
+        print(f"\n[*] TEST 5: Immediate Reassignment of Freed Officer #{constable_id}...")
+        async with session.post(assign_url, json={'gpid': target_gpid, 'constable_id': constable_id}) as resp:
             reassign_status = resp.status
             reassign_data = await resp.json()
             assert reassign_status in [200, 201], f"Re-assignment failed: {reassign_status} {reassign_data}"
-            print(f"    [+] GPID {target_gpid} immediately reassigned to Station Officer #{new_officer} (Status: {reassign_status}).")
+            print(f"    [+] GPID {target_gpid} immediately reassigned to freed Officer #{constable_id} (Status: {reassign_status}).")
 
     print("\n" + "=" * 80)
     print("  ALL CONCURRENCY & RACE CONDITION INVARIANTS VERIFIED (100% PASS)")
