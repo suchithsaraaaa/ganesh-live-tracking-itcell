@@ -25,6 +25,8 @@ import random
 import json
 import argparse
 import sys
+import subprocess
+import os
 from datetime import datetime, timezone
 
 # Stage definitions
@@ -49,12 +51,27 @@ class MetricsCollector:
         self.telemetry_duplicates = 0
         self.telemetry_failed = 0
         self.errors = []
+        self.cpu_samples = []
+        self.ram_samples = []
+        self.swap_samples = []
+        self.db_conn_samples = []
 
     def start(self):
         self.start_time = time.time()
 
     def stop(self):
         self.end_time = time.time()
+
+    async def record_system_sample(self, cpu_pct, ram_mb, swap_mb, db_conns):
+        async with self.lock:
+            if cpu_pct is not None:
+                self.cpu_samples.append(cpu_pct)
+            if ram_mb is not None:
+                self.ram_samples.append(ram_mb)
+            if swap_mb is not None:
+                self.swap_samples.append(swap_mb)
+            if db_conns is not None:
+                self.db_conn_samples.append(db_conns)
 
     async def record_request(self, endpoint, status, duration_ms, is_telemetry=False, is_dup=False):
         async with self.lock:
@@ -125,8 +142,75 @@ class MetricsCollector:
                 'duplicates_ignored': self.telemetry_duplicates,
                 'failed': self.telemetry_failed,
             },
-            'status_codes': self.status_codes
+            'status_codes': self.status_codes,
+            'system_metrics': {
+                'cpu_avg_pct': round(sum(self.cpu_samples) / len(self.cpu_samples), 1) if self.cpu_samples else 0.0,
+                'cpu_peak_pct': round(max(self.cpu_samples), 1) if self.cpu_samples else 0.0,
+                'ram_avg_mb': round(sum(self.ram_samples) / len(self.ram_samples), 1) if self.ram_samples else 0.0,
+                'ram_peak_mb': round(max(self.ram_samples), 1) if self.ram_samples else 0.0,
+                'swap_peak_mb': round(max(self.swap_samples), 1) if self.swap_samples else 0.0,
+                'db_connections_peak': max(self.db_conn_samples) if self.db_conn_samples else 0,
+            }
         }
+
+def get_db_connections():
+    try:
+        res = subprocess.run(
+            ["docker", "exec", "ganesh-live-tracking-itcell-db-1", "psql", "-U", "postgres", "-t", "-A", "-c", "SELECT count(1) FROM pg_stat_activity;"],
+            capture_output=True, text=True, timeout=2
+        )
+        if res.returncode == 0 and res.stdout.strip().isdigit():
+            return int(res.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+def read_mem_stats():
+    try:
+        mem_info = {}
+        with open('/proc/meminfo', 'r') as f:
+            for line in f:
+                parts = line.split(':')
+                if len(parts) == 2:
+                    mem_info[parts[0].strip()] = int(parts[1].strip().split()[0])
+        total_ram = mem_info.get('MemTotal', 0) / 1024
+        avail_ram = mem_info.get('MemAvailable', 0) / 1024
+        used_ram = total_ram - avail_ram
+        total_swap = mem_info.get('SwapTotal', 0) / 1024
+        free_swap = mem_info.get('SwapFree', 0) / 1024
+        used_swap = total_swap - free_swap
+        return used_ram, used_swap
+    except Exception:
+        return None, None
+
+def read_cpu_raw():
+    try:
+        with open('/proc/stat', 'r') as f:
+            line = f.readline()
+            if line.startswith('cpu '):
+                fields = [float(x) for x in line.split()[1:]]
+                idle = fields[3] + fields[4]
+                total = sum(fields)
+                return idle, total
+    except Exception:
+        pass
+    return None, None
+
+async def monitor_system_resources(metrics, stop_event):
+    last_idle, last_total = read_cpu_raw()
+    while not stop_event.is_set():
+        await asyncio.sleep(3.0)
+        curr_idle, curr_total = read_cpu_raw()
+        cpu_pct = None
+        if last_idle is not None and curr_idle is not None and curr_total > last_total:
+            diff_idle = curr_idle - last_idle
+            diff_total = curr_total - last_total
+            cpu_pct = max(0.0, min(100.0, (1.0 - (diff_idle / diff_total)) * 100.0))
+            last_idle, last_total = curr_idle, curr_total
+        
+        ram_mb, swap_mb = read_mem_stats()
+        db_conns = get_db_connections()
+        await metrics.record_system_sample(cpu_pct, ram_mb, swap_mb, db_conns)
 
 async def authenticate_user(session, base_url, username, password):
     url = f"{base_url}/api/v1/auth/login/"
@@ -279,12 +363,20 @@ async def run_stage(stage_num, base_url, admin_user, admin_pass):
     auth_headers = {}
     cookies = {}
     async with aiohttp.ClientSession() as setup_session:
-        # Test login latency
-        cookies, csrf, login_ms = await authenticate_user(setup_session, base_url, admin_user, admin_pass)
-        print(f"[+] Admin authentication response time: {login_ms:.2f} ms")
-        if csrf:
-            auth_headers['X-CSRFToken'] = csrf
-            auth_headers['Referer'] = base_url
+        # Test login latency with retries if server is recovering
+        for attempt in range(1, 5):
+            cookies, csrf, login_ms = await authenticate_user(setup_session, base_url, admin_user, admin_pass)
+            if csrf:
+                print(f"[+] Admin authentication response time (attempt {attempt}): {login_ms:.2f} ms")
+                auth_headers['X-CSRFToken'] = csrf
+                auth_headers['Referer'] = base_url
+                break
+            print(f"[!] Authentication attempt {attempt} timed out ({login_ms:.1f}ms). Cooling down 5s...")
+            await asyncio.sleep(5)
+
+        if not csrf:
+            print("[ERROR] Unable to authenticate admin session. Aborting unauthenticated test.")
+            return None
 
         # Fetch active tracking sessions from isolated environment
         try:
@@ -324,6 +416,10 @@ async def run_stage(stage_num, base_url, admin_user, admin_pass):
         t = asyncio.create_task(simulate_mobile_device(s_idx, base_url, metrics, stop_event, auth_headers, cookies, sess_id))
         tasks.append(t)
 
+    # Spawn System Resource Monitor
+    monitor_task = asyncio.create_task(monitor_system_resources(metrics, stop_event))
+    tasks.append(monitor_task)
+
     print(f"[+] All {len(tasks)} concurrent tasks running. Monitoring for {duration} seconds...")
     # Monitor loop
     start_time = time.time()
@@ -331,10 +427,13 @@ async def run_stage(stage_num, base_url, admin_user, admin_pass):
         await asyncio.sleep(10)
         elapsed = int(time.time() - start_time)
         res = metrics.report()
+        sm = res.get('system_metrics', {})
         print(f"    [{elapsed:>3}s / {duration}s] Req: {res['total_requests']:>6} | "
               f"RPS: {res['requests_per_sec']:>6.1f} | "
               f"p95: {res['overall_latency']['p95']:>6.1f}ms | "
               f"Errors: {res['error_rate_pct']:>4.1f}% | "
+              f"CPU: {sm.get('cpu_peak_pct', 0.0):>4.1f}% | "
+              f"RAM: {sm.get('ram_peak_mb', 0.0):>6.0f}MB | "
               f"GPS: {res['telemetry']['sent']} sent ({res['telemetry']['duplicates_ignored']} dups)")
 
     print("[*] Test window finished. Signaling tasks to stop...")
@@ -369,6 +468,13 @@ async def run_stage(stage_num, base_url, admin_user, admin_pass):
     print(f"    - Accepted:       {summary['telemetry']['accepted']}")
     print(f"    - Duplicates Ok:  {summary['telemetry']['duplicates_ignored']}")
     print(f"    - Failed:         {summary['telemetry']['failed']}")
+    if 'system_metrics' in summary:
+        sm = summary['system_metrics']
+        print(f"  System Resources (EC2):")
+        print(f"    - CPU Utilization:  Avg {sm['cpu_avg_pct']}% | Peak {sm['cpu_peak_pct']}%")
+        print(f"    - RAM Utilization:  Avg {sm['ram_avg_mb']} MB | Peak {sm['ram_peak_mb']} MB")
+        print(f"    - Swap Utilization: Peak {sm['swap_peak_mb']} MB")
+        print(f"    - DB Connections:   Peak {sm['db_connections_peak']}")
     print("\n  Per-Endpoint Latency Breakdown:")
     for ep, stat in summary['endpoints'].items():
         print(f"    {ep:<32} Req: {stat['count']:<6} | p50: {stat['p50']:>6.1f}ms | p95: {stat['p95']:>6.1f}ms | Max: {stat['max']:>7.1f}ms")
