@@ -30,6 +30,8 @@ from apps.idols.models import Idol, ProcessionState, GeocodingConfidence
 from apps.assignments.models import Assignment
 from apps.tracking.models import TrackingSession, TrackingSessionStatus, LocationPoint
 
+from django.contrib.auth.hashers import make_password
+
 def verify_safety():
     db_name = connection.settings_dict['NAME']
     print(f"[*] Target database: {db_name}")
@@ -42,6 +44,9 @@ def verify_safety():
 def seed():
     verify_safety()
     with transaction.atomic():
+        print("[*] Pre-computing valid PBKDF2 password hash...")
+        hashed_pwd = make_password('Police@Test2026!')
+
         print("[*] Creating administrative officers...")
         admin, _ = User.objects.get_or_create(
             username='loadtest_admin',
@@ -50,10 +55,12 @@ def seed():
                 'email': 'loadtest_admin@police.gov.in',
                 'police_id': 'TS-HQ-0001',
                 'phone_number': '9999900000',
+                'password': hashed_pwd,
             }
         )
-        admin.set_password('Police@Test2026!')
-        admin.save()
+        if admin.password != hashed_pwd:
+            admin.password = hashed_pwd
+            admin.save()
 
         # 20 Station Officers (SHO)
         station_names = [
@@ -72,10 +79,12 @@ def seed():
                     'zone': 'Central Zone' if i < 10 else 'South Zone',
                     'police_id': f'TS-SHO-{i+1:03d}',
                     'phone_number': f'999991{i+1:04d}',
+                    'password': hashed_pwd,
                 }
             )
-            sho.set_password('Police@Test2026!')
-            sho.save()
+            if sho.password != hashed_pwd:
+                sho.password = hashed_pwd
+                sho.save()
             shos.append(sho)
 
         print("[*] Creating 400 Constable accounts...")
@@ -90,10 +99,12 @@ def seed():
                     'zone': 'Central Zone' if (i % 2 == 0) else 'South Zone',
                     'police_id': f'TS-PC-{i:04d}',
                     'phone_number': f'99998{i:05d}',
+                    'password': hashed_pwd,
                 }
             )
-            c.set_password('Police@Test2026!')
-            c.save()
+            if c.password != hashed_pwd:
+                c.password = hashed_pwd
+                c.save()
             constables.append(c)
 
         print("[*] Creating 500 Test Idols with valid geocoded coordinates...")
@@ -142,8 +153,7 @@ def seed():
                     assigned_by=admin,
                     is_active=True,
                     officer_name_snapshot=c.get_full_name() or c.username,
-                    officer_phone_snapshot=c.phone_number,
-                    officer_role_snapshot=c.role,
+                    police_id_snapshot=c.police_id,
                 )
 
             # Update idol state
