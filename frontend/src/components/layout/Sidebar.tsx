@@ -13,11 +13,11 @@ import {
   KeyRound,
   ClipboardList,
   Settings,
-  Shield,
   LucideIcon,
 } from 'lucide-react';
 import { useAuth, canManageAssignments, isMainOfficer } from '../../context/AuthContext';
 import { GaneshaMark } from '../shared/GaneshaMark';
+import telanganaPoliceLogo from '../../assets/branding/telangana-police-logo.png';
 
 interface NavEntry {
   key: string;
@@ -99,7 +99,11 @@ export const Sidebar: React.FC = () => {
       {/* Brand */}
       <div className="px-3 lg:px-6 pt-6 pb-5 flex justify-center lg:justify-start">
         <div className="flex items-center gap-2.5">
-          <Shield className="w-[22px] h-[22px] text-accent shrink-0" strokeWidth={1.6} />
+          <img
+            src={telanganaPoliceLogo}
+            alt="Telangana State Police"
+            className="w-6 h-7 object-contain shrink-0"
+          />
           <div className="leading-tight hidden lg:block">
             <div className="text-[15px] font-semibold text-text-primary tracking-tight">HYDERABAD</div>
             <div className="text-[15px] font-semibold text-text-primary tracking-tight">CITY POLICE</div>

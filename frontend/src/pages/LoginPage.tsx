@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, ShieldCheck, Lock, User as UserIcon } from 'lucide-react';
+import { Eye, EyeOff, Lock, User as UserIcon } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { GaneshaMark } from '../components/shared/GaneshaMark';
 import { ApiError } from '../api/client';
+import telanganaPoliceLogo from '../assets/branding/telangana-police-logo.png';
 
 export const LoginPage: React.FC = () => {
   const { user, login } = useAuth();
@@ -63,11 +64,22 @@ export const LoginPage: React.FC = () => {
           <path d="M0 300V220h40l10-30 10 30h30V190l20-40 20 40v30h40V170l15-35 15 35v50h50V150l25-55 25 55v70h50V180l15-30 15 30v40h40V210l10-25 10 25h30V240h60V190l20-40 20 40v50h40V220h30l10-25 10 25h20V300Z" />
         </svg>
 
-        <div className="relative z-10 p-10 lg:p-14 flex items-center gap-3">
-          <ShieldCheck className="w-7 h-7 text-accent" strokeWidth={1.6} />
+        <div className="relative z-10 p-10 lg:p-14 flex items-center gap-4">
+          <img
+            src={telanganaPoliceLogo}
+            alt="Telangana State Police"
+            className="h-24 lg:h-28 w-auto object-contain shrink-0 drop-shadow-xl"
+          />
           <div className="leading-tight">
-            <div className="text-lg font-semibold text-text-primary tracking-tight">HYDERABAD CITY POLICE</div>
-            <div className="text-xs text-text-tertiary">Ganesh Visarjan Monitoring System</div>
+            <div className="text-[11px] font-bold text-accent uppercase tracking-widest mb-1">
+              Telangana State Police
+            </div>
+            <div className="text-xl lg:text-2xl font-bold text-text-primary tracking-tight">
+              HYDERABAD CITY POLICE
+            </div>
+            <div className="text-xs text-text-tertiary mt-0.5">
+              Ganesh Visarjan Monitoring System
+            </div>
           </div>
         </div>
 
@@ -88,10 +100,17 @@ export const LoginPage: React.FC = () => {
       {/* RIGHT — login panel */}
       <div className="flex-1 flex items-center justify-center px-6">
         <div className="w-full max-w-sm animate-fade-in-up">
-          <div className="md:hidden flex flex-col items-center gap-2 mb-8">
-            <GaneshaMark className="w-12 h-12 text-accent/80" />
+          <div className="md:hidden flex flex-col items-center gap-2 mb-6">
+            <img
+              src={telanganaPoliceLogo}
+              alt="Telangana State Police"
+              className="h-16 w-auto object-contain drop-shadow"
+            />
             <div className="text-center leading-tight">
-              <div className="text-base font-semibold text-text-primary">HYDERABAD CITY POLICE</div>
+              <div className="text-[10px] font-bold text-accent uppercase tracking-wider">
+                Telangana State Police
+              </div>
+              <div className="text-base font-bold text-text-primary">HYDERABAD CITY POLICE</div>
               <div className="text-xs text-text-tertiary">Ganesh Visarjan Monitoring System</div>
             </div>
           </div>

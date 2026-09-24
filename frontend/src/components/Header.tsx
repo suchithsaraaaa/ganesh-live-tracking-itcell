@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { RefreshCw, UserCheck, LogOut } from 'lucide-react';
 import { useAuth, roleLabel } from '../context/AuthContext';
 import { useTracking } from '../context/TrackingContext';
+import telanganaPoliceLogo from '../assets/branding/telangana-police-logo.png';
 
 export const Header: React.FC = () => {
   const { user, logout } = useAuth();
@@ -30,9 +31,16 @@ export const Header: React.FC = () => {
 
   return (
     <header className="glass h-16 border-b flex items-center justify-between px-6 z-20 shrink-0">
-      <div className="leading-tight">
-        <h1 className="text-sm font-semibold text-text-primary">Hyderabad City Police</h1>
-        <p className="text-xs text-text-secondary">Ganesh Visarjan Monitoring System</p>
+      <div className="flex items-center gap-3">
+        <img
+          src={telanganaPoliceLogo}
+          alt="Telangana State Police"
+          className="h-8 w-auto object-contain shrink-0"
+        />
+        <div className="leading-tight">
+          <h1 className="text-sm font-semibold text-text-primary">Hyderabad City Police</h1>
+          <p className="text-xs text-text-secondary">Ganesh Visarjan Monitoring System</p>
+        </div>
       </div>
 
       <div className="hidden md:flex flex-col items-center leading-tight select-none">

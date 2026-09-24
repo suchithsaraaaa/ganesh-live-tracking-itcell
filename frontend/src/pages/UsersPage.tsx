@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Search,
   UserPlus,
-  Shield,
   Edit2,
   CheckCircle,
   XCircle,
@@ -27,6 +26,7 @@ import {
 import { User, UserRole, PoliceStationMaster } from '../types';
 import { useAuth, roleLabel } from '../context/AuthContext';
 import { LoadingState, EmptyState, ErrorState } from '../components/shared/States';
+import telanganaPoliceLogo from '../assets/branding/telangana-police-logo.png';
 
 const CANONICAL_PERMISSIONS = [
   { key: 'view_dashboard', label: 'View Dashboard', desc: 'Access command overview and metrics' },
@@ -388,21 +388,28 @@ export const UsersPage: React.FC = () => {
     <div className="h-full flex flex-col overflow-hidden animate-fade-in-up">
       {/* Header */}
       <div className="px-6 pt-6 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-lg font-semibold text-text-primary">User Management</h1>
-            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-accent/15 text-accent border border-accent/25 mono">
-              {totalRegisteredCount} Registered Accounts
-            </span>
-            {isFiltered && (
-              <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-elevated-2 text-text-secondary border border-border-default mono">
-                Showing {users.length} of {totalRegisteredCount} accounts
+        <div className="flex items-start gap-3.5">
+          <img
+            src={telanganaPoliceLogo}
+            alt="Telangana State Police"
+            className="w-9 h-11 object-contain shrink-0 mt-0.5"
+          />
+          <div>
+            <div className="flex items-center space-x-2">
+              <h1 className="text-lg font-semibold text-text-primary">User Management</h1>
+              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-accent/15 text-accent border border-accent/25 mono">
+                {totalRegisteredCount} Registered Accounts
               </span>
-            )}
+              {isFiltered && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-elevated-2 text-text-secondary border border-border-default mono">
+                  Showing {users.length} of {totalRegisteredCount} accounts
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-text-tertiary mt-0.5">
+              Manage police department officer accounts, role hierarchy, jurisdictional boundaries, and security permissions.
+            </p>
           </div>
-          <p className="text-xs text-text-tertiary mt-0.5">
-            Manage police department officer accounts, role hierarchy, jurisdictional boundaries, and security permissions.
-          </p>
         </div>
 
         <button
@@ -724,8 +731,12 @@ export const UsersPage: React.FC = () => {
           <div className="w-full max-w-xl bg-elevated border border-border-default rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
             {/* Modal Header */}
             <div className="px-5 py-3.5 bg-base border-b border-border-subtle flex items-center justify-between shrink-0">
-              <div className="flex items-center space-x-2">
-                <Shield className="w-5 h-5 text-accent" />
+              <div className="flex items-center space-x-2.5">
+                <img
+                  src={telanganaPoliceLogo}
+                  alt="Telangana State Police"
+                  className="w-5 h-6 object-contain shrink-0"
+                />
                 <h2 className="text-sm font-semibold text-text-primary uppercase tracking-wider">
                   {modalMode === 'create' ? 'Create Officer Account' : `Edit Account: @${selectedUser?.username}`}
                 </h2>
