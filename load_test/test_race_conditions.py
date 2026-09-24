@@ -193,5 +193,10 @@ async def test_race_conditions(base_url, admin_user, admin_pass):
     print("=" * 80)
 
 if __name__ == '__main__':
-    base_url = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8001"
-    asyncio.run(test_race_conditions(base_url, "loadtest_admin", "Police@Test2026!"))
+    base_url = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("BASE_URL", "http://127.0.0.1:8000")
+    admin_user = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("LOADTEST_USER", "admin")
+    admin_pass = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("LOADTEST_PASSWORD", "")
+    if not admin_pass:
+        print("[ERROR] Password must be supplied as argument or LOADTEST_PASSWORD environment variable.")
+        sys.exit(1)
+    asyncio.run(test_race_conditions(base_url, admin_user, admin_pass))

@@ -485,9 +485,13 @@ def main():
     parser = argparse.ArgumentParser(description="Concurrent HTTP Load Test Runner")
     parser.add_argument('--stage', type=int, default=0, choices=[0, 1, 2, 3, 4, 5], help="Stage number (0 to 5)")
     parser.add_argument('--base-url', type=str, default="http://127.0.0.1:8000", help="Base URL of target API")
-    parser.add_argument('--user', type=str, default="loadtest_admin", help="Admin username")
-    parser.add_argument('--password', type=str, default="Police@Test2026!", help="Admin password")
+    parser.add_argument('--user', type=str, default=os.environ.get('LOADTEST_USER', 'admin'), help="Admin username")
+    parser.add_argument('--password', type=str, default=os.environ.get('LOADTEST_PASSWORD', ''), help="Admin password")
     args = parser.parse_args()
+
+    if not args.password:
+        print("[ERROR] Password must be provided via --password or LOADTEST_PASSWORD environment variable.")
+        sys.exit(1)
 
     asyncio.run(run_stage(args.stage, args.base_url, args.user, args.password))
 

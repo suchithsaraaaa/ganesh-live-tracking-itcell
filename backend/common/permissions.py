@@ -84,8 +84,14 @@ def filter_by_jurisdiction(queryset, user, ps_field='police_station', zone_field
         return queryset.none()
 
     if user.role == UserRole.CONSTABLE:
-        if getattr(queryset, 'model', None) and queryset.model.__name__ == 'User':
-            return queryset.filter(id=user.id)
+        if getattr(queryset, 'model', None):
+            model_name = queryset.model.__name__
+            if model_name == 'User':
+                return queryset.filter(id=user.id)
+            if model_name == 'TrackingSession':
+                return queryset.filter(assignment__constable=user, assignment__is_active=True)
+            if model_name == 'Assignment':
+                return queryset.filter(constable=user, is_active=True)
         # Constable only sees idols currently assigned to them
         from apps.assignments.models import Assignment
         assigned_idol_ids = Assignment.objects.filter(
