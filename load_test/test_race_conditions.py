@@ -174,7 +174,7 @@ async def test_race_conditions(base_url, admin_user, admin_pass):
             print("    [+] Idol cleanly removed from active tracking map markers.")
 
         # 3. Journey breadcrumbs remain intact in database
-        async with session.get(f"{base_url}/api/v1/idols/{target_gpid}/journey/?session_id={target_session_id}") as resp:
+        async with session.get(f"{base_url}/api/v1/tracking/idols/{target_gpid}/journey/?session_id={target_session_id}") as resp:
             j_data = await resp.json()
             points_count = len(j_data.get('points', []))
             assert points_count > 0, "Telemetry points were deleted or corrupted!"
