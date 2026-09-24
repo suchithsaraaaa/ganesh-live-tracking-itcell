@@ -55,8 +55,8 @@ async def test_race_conditions(base_url, admin_user, admin_pass):
             idol_1 = i_data['results'][0]['gpid']
             idol_2 = i_data['results'][1]['gpid']
 
-        # Attempt simultaneous POST to /api/v1/assignments/
-        assign_url = f"{base_url}/api/v1/assignments/"
+        # Attempt simultaneous POST to /api/v1/assignments/create/
+        assign_url = f"{base_url}/api/v1/assignments/create/"
         req1 = session.post(assign_url, json={'gpid': idol_1, 'constable_id': test_officer})
         req2 = session.post(assign_url, json={'gpid': idol_2, 'constable_id': test_officer})
 
@@ -102,11 +102,18 @@ async def test_race_conditions(base_url, admin_user, admin_pass):
             target_marker = active_list[0]
             target_gpid = target_marker['gpid']
             target_session_id = target_marker['tracking_session_id']
-            print(f"    Selected target GPID {target_gpid} with active session #{target_session_id}")
+
+        # Find active assignment ID
+        async with session.get(f"{base_url}/api/v1/assignments/?gpid={target_gpid}") as a_resp:
+            a_data = await a_resp.json()
+            active_assignments = [a for a in a_data.get('results', []) if a.get('is_active')]
+            assert len(active_assignments) > 0, f"No active assignment found for {target_gpid}"
+            target_assignment_id = active_assignments[0]['id']
+            print(f"    Selected GPID {target_gpid} | Assignment #{target_assignment_id} | Session #{target_session_id}")
 
         # Concurrently send telemetry pings while triggering admin force-end
         telemetry_url = f"{base_url}/api/v1/tracking/location/"
-        force_end_url = f"{base_url}/api/v1/assignments/force-end/"
+        force_end_url = f"{base_url}/api/v1/assignments/{target_assignment_id}/end/"
         
         async def send_burst_telemetry():
             results = []
@@ -131,8 +138,9 @@ async def test_race_conditions(base_url, admin_user, admin_pass):
         async def trigger_force_end():
             await asyncio.sleep(0.08)  # fire during telemetry burst
             try:
-                async with session.post(force_end_url, json={'gpid': target_gpid, 'reason': 'Race Condition Load Test'}) as r:
-                    return r.status, await r.json()
+                async with session.post(force_end_url, json={'reason': 'Race Condition Load Test'}) as r:
+                    res_json = await r.json() if r.status < 500 else await r.text()
+                    return r.status, res_json
             except Exception as e:
                 return 500, str(e)
 
@@ -142,7 +150,7 @@ async def test_race_conditions(base_url, admin_user, admin_pass):
         telemetry_res, force_end_res = await asyncio.gather(telemetry_future, force_end_future)
         fe_status, fe_data = force_end_res
         print(f"    Telemetry burst statuses: {telemetry_res}")
-        print(f"    Force-end status: {fe_status} -> {fe_data.get('status') or fe_data}")
+        print(f"    Force-end status: {fe_status} -> {fe_data}")
         assert fe_status in [200, 201], f"Force-end failed: {fe_status} {fe_data}"
 
         # -------------------------------------------------------------------------
