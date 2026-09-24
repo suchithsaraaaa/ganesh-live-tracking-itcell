@@ -1622,11 +1622,83 @@ class TargetedRBACSecurityPatchTests(TestCase):
         self.assertEqual(res_jh.status_code, 200)
         self.assertEqual(res_jh.data['role_display'], 'Zonal System Admin')
         self.assertEqual(res_jh.data['jurisdiction_display'], 'Jubilee Hills')
+        # Check permissions and effective_permissions are both returned
+        self.assertIn('permissions', res_jh.data)
+        self.assertIn('effective_permissions', res_jh.data)
+        self.assertIsInstance(res_jh.data['effective_permissions'], list)
+        self.assertGreater(len(res_jh.data['effective_permissions']), 0)
 
         res_super = self.client.get(f'/api/v1/auth/users/{self.super_admin.id}/')
         self.assertEqual(res_super.status_code, 200)
         self.assertEqual(res_super.data['role_display'], 'Super Administrator')
         self.assertEqual(res_super.data['jurisdiction_display'], 'City Wide')
+
+    def test_sys_admin_can_create_constable_with_authorized_granular_permissions(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        res = self.client.post('/api/v1/auth/users/', {
+            'username': 'new_pc_jh_01',
+            'password': 'Password123!',
+            'role': UserRole.CONSTABLE,
+            'police_id': 'PC-JH-01',
+            'zone': 'Jubilee Hills',
+            'police_station': 'Jubilee Hills',
+            'custom_permissions': ['view_live_map', 'ingest_telemetry'],
+        }, format='json')
+        self.assertEqual(res.status_code, 201)
+        created_user = User.objects.get(username='new_pc_jh_01')
+        self.assertEqual(created_user.zone, 'Jubilee Hills')
+        self.assertEqual(created_user.custom_permissions, ['view_live_map', 'ingest_telemetry'])
+
+    def test_sys_admin_cannot_grant_super_admin_only_permissions(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        for sensitive_perm in ['manage_roles', 'manage_role_templates', 'manage_geography']:
+            res = self.client.post('/api/v1/auth/users/', {
+                'username': f'bad_perm_{sensitive_perm}',
+                'password': 'Password123!',
+                'role': UserRole.CONSTABLE,
+                'police_id': 'PC-JH-BAD',
+                'zone': 'Jubilee Hills',
+                'police_station': 'Jubilee Hills',
+                'custom_permissions': [sensitive_perm],
+            }, format='json')
+            self.assertEqual(res.status_code, 400)
+            self.assertIn('custom_permissions', res.data)
+
+    def test_sys_admin_cannot_create_user_outside_zone(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        res = self.client.post('/api/v1/auth/users/', {
+            'username': 'cross_zone_user',
+            'password': 'Password123!',
+            'role': UserRole.CONSTABLE,
+            'police_id': 'PC-CMR-01',
+            'zone': 'Charminar',
+            'police_station': 'Charminar',
+        }, format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('zone', res.data)
+
+    def test_sys_admin_cannot_create_user_with_global_administrative_authority(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        for forbidden_role in [UserRole.SUPER_ADMIN, UserRole.MAIN_OFFICER, UserRole.ACP]:
+            res = self.client.post('/api/v1/auth/users/', {
+                'username': f'bad_admin_{forbidden_role}',
+                'password': 'Password123!',
+                'role': forbidden_role,
+                'police_id': 'BAD-ID',
+                'zone': 'Jubilee Hills',
+            }, format='json')
+            self.assertEqual(res.status_code, 400)
+            self.assertIn('role', res.data)
+
+    def test_sys_admin_can_edit_subordinate_granular_permissions_in_own_zone(self):
+        self.client.force_authenticate(user=self.sys_admin_jh)
+        res = self.client.patch(f'/api/v1/auth/users/{self.constable_jh.id}/', {
+            'custom_permissions': ['view_live_map', 'view_reports'],
+        }, format='json')
+        self.assertEqual(res.status_code, 200)
+        self.constable_jh.refresh_from_db()
+        self.assertEqual(self.constable_jh.custom_permissions, ['view_live_map', 'view_reports'])
+
 
 
 

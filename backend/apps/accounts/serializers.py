@@ -7,6 +7,7 @@ class UserSerializer(serializers.ModelSerializer):
     role_display = serializers.SerializerMethodField()
     jurisdiction_display = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
+    effective_permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -25,6 +26,7 @@ class UserSerializer(serializers.ModelSerializer):
             'police_station',
             'is_active',
             'permissions',
+            'effective_permissions',
             'custom_permissions',
             'date_joined',
             'last_login',
@@ -57,6 +59,9 @@ class UserSerializer(serializers.ModelSerializer):
         return 'Unassigned'
 
     def get_permissions(self, obj) -> list[str]:
+        return obj.get_effective_permissions()
+
+    def get_effective_permissions(self, obj) -> list[str]:
         return obj.get_effective_permissions()
 
 

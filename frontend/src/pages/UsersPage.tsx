@@ -1089,7 +1089,7 @@ export const UsersPage: React.FC = () => {
                       if (isSuperAdmin(currentUser)) return true;
                       const SENSITIVE_PERMISSION_KEYS = ['manage_roles', 'manage_role_templates', 'global_settings', 'manage_geography'];
                       if (SENSITIVE_PERMISSION_KEYS.includes(perm.key)) return false;
-                      const callerPerms = currentUser?.effective_permissions || [];
+                      const callerPerms = currentUser?.effective_permissions || currentUser?.permissions || [];
                       return callerPerms.includes(perm.key);
                     })
                     .map((perm) => {
