@@ -245,7 +245,7 @@ export interface Assignment {
   created_at: string;
 }
 
-export type HeightBucketFilter = 'all_15_plus' | '15_20' | '21_25' | '26_plus';
+export type HeightBucketFilter = 'all' | 'all_heights' | 'below_15' | '15_20' | '21_25' | '26_plus' | 'all_15_plus';
 export type AssignmentStatusFilter = 'all' | 'unassigned' | 'assigned';
 export type VisarjanDateFilter = 'all' | 'today' | 'tomorrow' | string;
 
@@ -256,8 +256,8 @@ export interface AssignableIdol {
   association_name: string;
   idol_height: number;
   height: number;
-  height_bucket: '15-20' | '21-25' | '26+';
-  height_classification: 'GREEN' | 'YELLOW' | 'RED';
+  height_bucket: 'below_15' | '15-20' | '21-25' | '26+' | string;
+  height_classification: 'GREEN' | 'YELLOW' | 'RED' | 'SUBTHRESHOLD' | 'UNKNOWN' | string;
   zone: string;
   division: string;
   police_station: string;
@@ -284,6 +284,7 @@ export interface AssignableIdol {
 
 export interface AssignableSummary {
   total_eligible: number;
+  count_below_15?: number;
   count_15_20: number;
   count_21_25: number;
   count_26_plus: number;
@@ -305,8 +306,8 @@ export interface AssignableIdolDetail {
   name: string;
   association_name: string;
   idol_height: number;
-  height_bucket: '15-20' | '21-25' | '26+';
-  height_classification: 'GREEN' | 'YELLOW' | 'RED';
+  height_bucket: 'below_15' | '15-20' | '21-25' | '26+' | string;
+  height_classification: 'GREEN' | 'YELLOW' | 'RED' | 'SUBTHRESHOLD' | 'UNKNOWN' | string;
   zone: string;
   division: string;
   police_station: string;

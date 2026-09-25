@@ -237,14 +237,15 @@ class AssignableIdolRegistryView(APIView):
         from django.db.models import Q
         from .serializers import AssignableIdolRegistrySerializer
 
-        # Rule 1 & 29: Base population strictly enforced to idol_height >= 15 FT
-        qs = Idol.objects.filter(idol_height__gte=15)
+        # Rule 1 & 29: Base population: ALL authoritative GPIDs in the registry
+        qs = Idol.objects.all()
 
         # Rule 30: Enforce server-side jurisdiction
         qs = filter_by_jurisdiction(qs, request.user)
 
         # Rule 10: Compute authoritative summary KPIs across the user's jurisdiction
         total_eligible = qs.count()
+        count_below_15 = qs.filter(Q(idol_height__lt=15) | Q(idol_height__isnull=True)).count()
         count_15_20 = qs.filter(idol_height__gte=15, idol_height__lt=21).count()
         count_21_25 = qs.filter(idol_height__gte=21, idol_height__lt=26).count()
         count_26_plus = qs.filter(idol_height__gte=26).count()
@@ -270,14 +271,18 @@ class AssignableIdolRegistryView(APIView):
 
         # Rule 4: Height bucket filter (AND composition)
         hb = request.query_params.get('height_bucket')
-        if hb and hb not in ['All 15+ FT', 'all', 'all_15_plus', '']:
+        if hb and hb not in ['All Heights', 'all', 'all_heights', '']:
             hb_clean = hb.lower().strip()
-            if hb_clean in ['15_20', '15-20', 'green']:
+            if hb_clean in ['below_15', 'below-15', 'under_15', '<15', 'subthreshold']:
+                qs = qs.filter(Q(idol_height__lt=15) | Q(idol_height__isnull=True))
+            elif hb_clean in ['15_20', '15-20', 'green']:
                 qs = qs.filter(idol_height__gte=15, idol_height__lt=21)
             elif hb_clean in ['21_25', '21-25', 'yellow']:
                 qs = qs.filter(idol_height__gte=21, idol_height__lt=26)
             elif hb_clean in ['26_plus', '26+', 'above_25', 'red']:
                 qs = qs.filter(idol_height__gte=26)
+            elif hb_clean in ['all_15_plus', '15_plus', '15+']:
+                qs = qs.filter(idol_height__gte=15)
 
         # Rule 7: Assignment status filter (AND composition)
         assignment_status = request.query_params.get('assignment_status')
@@ -369,6 +374,7 @@ class AssignableIdolRegistryView(APIView):
         response_data = paginator.get_paginated_response(serializer.data).data
         response_data['summary'] = {
             'total_eligible': total_eligible,
+            'count_below_15': count_below_15,
             'count_15_20': count_15_20,
             'count_21_25': count_21_25,
             'count_26_plus': count_26_plus,
@@ -381,8 +387,7 @@ class AssignableIdolRegistryView(APIView):
 class AssignableIdolDetailView(APIView):
     """
     Detailed operational view for a single GPID in the assignment console.
-    Enforces the authoritative 15 FT+ eligibility rule and returns authoritative
-    procession timeline events from IdolEvent.
+    Returns authoritative procession timeline events from IdolEvent.
     """
     permission_classes = [CanAssignFieldOfficers]
 
@@ -396,13 +401,6 @@ class AssignableIdolDetailView(APIView):
             idol = Idol.objects.get(gpid__iexact=gpid.strip())
         except Idol.DoesNotExist:
             return Response({'error': f'Idol with GPID {gpid} not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-        # Rule 1 & 29: Absolute Eligibility Rule — strictly reject <15 FT
-        if not idol.idol_height or idol.idol_height < 15:
-            return Response(
-                {'error': f'Idol {idol.gpid} (height {idol.idol_height or 0} FT) is ineligible for assignment. Minimum required height is 15 FT.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
 
         # Rule 30: Jurisdiction verification
         if not filter_by_jurisdiction(Idol.objects.filter(id=idol.id), request.user).exists():
@@ -538,11 +536,6 @@ class AssignableEligibleOfficersView(APIView):
         if not filter_by_jurisdiction(Idol.objects.filter(id=idol.id), request.user).exists():
             return Response({'error': 'You do not have jurisdiction over this idol.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # Rule 1 & 29: Absolute Eligibility Rule — strictly reject <15 FT
-        if not idol.idol_height or idol.idol_height < 15:
-            return Response({
-                'error': f'Idol {idol.gpid} has height {idol.idol_height or 0} FT. Only 15 FT+ idols are eligible for officer assignments.'
-            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Currently assigned constables across the entire system
         active_assigned_constable_ids = set(
@@ -606,8 +599,8 @@ class AssignmentExportExcelView(APIView):
         from django.db.models import Q
         from apps.idols.models import Idol
 
-        # Base population: strictly 15 FT+
-        qs = Idol.objects.filter(idol_height__gte=15)
+        # Base population: all idols in jurisdiction
+        qs = Idol.objects.all()
         qs = filter_by_jurisdiction(qs, request.user)
 
         # Filters
@@ -620,14 +613,18 @@ class AssignmentExportExcelView(APIView):
             qs = qs.filter(police_station__iexact=ps.strip())
 
         hb = request.query_params.get('height_bucket')
-        if hb and hb not in ['All 15+ FT', 'all', 'all_15_plus', '']:
+        if hb and hb not in ['All Heights', 'all', 'all_heights', '']:
             hb_clean = hb.lower().strip()
-            if hb_clean in ['15_20', '15-20', 'green']:
+            if hb_clean in ['below_15', 'below-15', 'under_15', '<15', 'subthreshold']:
+                qs = qs.filter(Q(idol_height__lt=15) | Q(idol_height__isnull=True))
+            elif hb_clean in ['15_20', '15-20', 'green']:
                 qs = qs.filter(idol_height__gte=15, idol_height__lt=21)
             elif hb_clean in ['21_25', '21-25', 'yellow']:
                 qs = qs.filter(idol_height__gte=21, idol_height__lt=26)
             elif hb_clean in ['26_plus', '26+', 'above_25', 'red']:
                 qs = qs.filter(idol_height__gte=26)
+            elif hb_clean in ['all_15_plus', '15_plus', '15+']:
+                qs = qs.filter(idol_height__gte=15)
 
         # Visarjan Date filter (AND composition)
         visarjan_date = request.query_params.get('visarjan_date')

@@ -261,7 +261,7 @@ export async function fetchAssignableRegistry(params?: {
   if (params?.page_size) query.append('page_size', params.page_size.toString());
   if (params?.zone && params.zone !== 'All Zones') query.append('zone', params.zone);
   if (params?.police_station && params.police_station !== 'All Police Stations') query.append('police_station', params.police_station);
-  if (params?.height_bucket && params.height_bucket !== 'All 15+ FT') query.append('height_bucket', params.height_bucket);
+  if (params?.height_bucket && !['all', 'all_heights', 'All Heights', 'All 15+ FT'].includes(params.height_bucket)) query.append('height_bucket', params.height_bucket);
   if (params?.assignment_status && params.assignment_status !== 'all') query.append('assignment_status', params.assignment_status);
   if (params?.visarjan_date && params.visarjan_date !== 'all' && params.visarjan_date !== 'All Dates') query.append('visarjan_date', params.visarjan_date);
   if (params?.search) query.append('search', params.search);
@@ -292,7 +292,7 @@ export function getAssignmentExcelExportUrl(params?: {
   const query = new URLSearchParams();
   if (params?.zone && params.zone !== 'All Zones') query.append('zone', params.zone);
   if (params?.police_station && params.police_station !== 'All Police Stations') query.append('police_station', params.police_station);
-  if (params?.height_bucket && params.height_bucket !== 'All 15+ FT') query.append('height_bucket', params.height_bucket);
+  if (params?.height_bucket && !['all', 'all_heights', 'All Heights', 'All 15+ FT'].includes(params.height_bucket)) query.append('height_bucket', params.height_bucket);
   if (params?.assignment_status && params.assignment_status !== 'all') query.append('assignment_status', params.assignment_status);
   if (params?.visarjan_date && params.visarjan_date !== 'all' && params.visarjan_date !== 'All Dates') query.append('visarjan_date', params.visarjan_date);
   if (params?.search) query.append('search', params.search);

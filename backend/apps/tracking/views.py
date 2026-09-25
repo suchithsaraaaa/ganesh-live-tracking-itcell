@@ -653,14 +653,18 @@ class ActiveTrackingListView(APIView):
             qs = qs.filter(assignment__idol__police_station__iexact=ps)
 
         height_bucket = request.query_params.get('height_bucket')
-        if height_bucket and height_bucket != 'ALL':
+        if height_bucket and height_bucket not in ['ALL', 'all', 'All Heights', '']:
             hb = height_bucket.lower().strip()
-            if hb in ['15_20', '15-20', 'green']:
+            if hb in ['below_15', 'below-15', 'under_15', '<15', 'subthreshold']:
+                qs = qs.filter(Q(assignment__idol__idol_height__lt=15) | Q(assignment__idol__idol_height__isnull=True))
+            elif hb in ['15_20', '15-20', 'green']:
                 qs = qs.filter(assignment__idol__idol_height__gte=15, assignment__idol__idol_height__lt=21)
             elif hb in ['21_25', '21-25', 'yellow']:
                 qs = qs.filter(assignment__idol__idol_height__gte=21, assignment__idol__idol_height__lt=26)
             elif hb in ['above_25', '26_plus', '26+', 'red']:
                 qs = qs.filter(assignment__idol__idol_height__gte=26)
+            elif hb in ['all_15_plus', '15_plus', '15+']:
+                qs = qs.filter(assignment__idol__idol_height__gte=15)
 
         search = request.query_params.get('search')
         if search:

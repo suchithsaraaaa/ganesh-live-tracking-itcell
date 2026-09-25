@@ -404,13 +404,20 @@ class OfficerAssignmentRedesignTests(TestCase):
             idol_height=18.0
         )
 
-    # 1. GPID below 15 FT is excluded from assignable registry
-    def test_01_gpid_below_15ft_excluded_from_registry(self):
+    # 1. GPID below 15 FT is included in assignable registry and categorized as below_15
+    def test_01_gpid_below_15ft_included_in_registry(self):
         self.client.force_authenticate(user=self.main_officer)
         res = self.client.get('/api/v1/assignments/registry/')
         self.assertEqual(res.status_code, 200)
         gpids = [item['gpid'] for item in res.data['results']]
-        self.assertNotIn(self.idol_12ft.gpid, gpids)
+        self.assertIn(self.idol_12ft.gpid, gpids)
+
+        # Test height bucket filter below_15
+        res_below = self.client.get('/api/v1/assignments/registry/?height_bucket=below_15')
+        self.assertEqual(res_below.status_code, 200)
+        below_gpids = [item['gpid'] for item in res_below.data['results']]
+        self.assertIn(self.idol_12ft.gpid, below_gpids)
+        self.assertNotIn(self.idol_15ft.gpid, below_gpids)
 
     # 2. GPID exactly 15 FT is included
     def test_02_gpid_exactly_15ft_included(self):
@@ -457,22 +464,23 @@ class OfficerAssignmentRedesignTests(TestCase):
         gpids = [item['gpid'] for item in res.data['results']]
         self.assertIn(self.idol_30ft.gpid, gpids)
 
-    # 8. Search cannot bypass 15 FT filtering
-    def test_08_search_cannot_bypass_15ft_filtering(self):
+    # 8. Search finds subthreshold GPID
+    def test_08_search_finds_subthreshold_gpid(self):
         self.client.force_authenticate(user=self.main_officer)
         res = self.client.get(f'/api/v1/assignments/registry/?search={self.idol_12ft.gpid}')
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(len(res.data['results']), 0)
+        self.assertEqual(len(res.data['results']), 1)
+        self.assertEqual(res.data['results'][0]['gpid'], self.idol_12ft.gpid)
 
-    # 9. Assignment creation rejects <15 FT
-    def test_09_assignment_creation_rejects_subthreshold_15ft(self):
+    # 9. Assignment creation supports sub-15 FT GPIDs
+    def test_09_assignment_creation_supports_subthreshold_15ft(self):
         self.client.force_authenticate(user=self.sho_cmr)
         res = self.client.post('/api/v1/assignments/create/', {
             'gpid': self.idol_12ft.gpid,
             'constable_id': self.pc_avail.id
         })
-        self.assertEqual(res.status_code, 400)
-        self.assertIn('ineligible for assignment', str(res.data))
+        self.assertEqual(res.status_code, 201)
+        self.assertTrue(Assignment.objects.filter(idol=self.idol_12ft, is_active=True).exists())
 
     # 10. Zone filtering works
     def test_10_zone_filtering_works(self):
@@ -651,22 +659,22 @@ class OfficerAssignmentRedesignTests(TestCase):
         self.assertIn('attachment; filename="Hyderabad_Police_Officer_Assignments_', res['Content-Disposition'])
         self.assertGreater(len(res.content), 1000)
 
-    # 24. Critical negative test: subthreshold idol cannot be assigned or retrieved via registry
-    def test_24_critical_negative_test_subthreshold_lookup_and_assign(self):
+    # 24. Subthreshold idol can be assigned and retrieved via registry
+    def test_24_subthreshold_lookup_and_assign_allowed(self):
         self.client.force_authenticate(user=self.main_officer)
 
-        # 1. Direct registry detail lookup rejects <15 FT
+        # 1. Direct registry detail lookup succeeds for <15 FT
         res_lookup = self.client.get(f'/api/v1/assignments/registry/{self.idol_12ft.gpid}/')
-        self.assertEqual(res_lookup.status_code, 400)
-        self.assertIn('ineligible for assignment', res_lookup.data['error'])
+        self.assertEqual(res_lookup.status_code, 200)
+        self.assertEqual(res_lookup.data['gpid'], self.idol_12ft.gpid)
 
-        # 2. Assignment creation rejects <15 FT
+        # 2. Assignment creation succeeds for <15 FT
         res_assign = self.client.post('/api/v1/assignments/create/', {
             'gpid': self.idol_12ft.gpid,
             'constable_id': self.pc_avail.id
         })
-        self.assertEqual(res_assign.status_code, 400)
-        self.assertIn('ineligible for assignment', str(res_assign.data))
+        self.assertEqual(res_assign.status_code, 201)
+        self.assertTrue(Assignment.objects.filter(idol=self.idol_12ft, is_active=True).exists())
 
     # 25. Eligible officers endpoint matches police station and zone, excludes assigned
     def test_25_eligible_officers_endpoint_matches_station_and_zone(self):
@@ -691,9 +699,10 @@ class OfficerAssignmentRedesignTests(TestCase):
         self.assertIn(pc_cmr_2.id, officer_ids)
         self.assertNotIn(pc_other.id, officer_ids)
 
-        # Subthreshold idol gives 400
+        # Subthreshold idol gives 200 and returns eligible officers
         res_sub = self.client.get(f'/api/v1/assignments/registry/{self.idol_12ft.gpid}/eligible-officers/')
-        self.assertEqual(res_sub.status_code, 400)
+        self.assertEqual(res_sub.status_code, 200)
+        self.assertIn('officers', res_sub.data)
 
     # 26. Visarjan date filter supports today, tomorrow, and custom dates
     def test_26_visarjan_date_filter_today_and_tomorrow(self):
@@ -959,5 +968,302 @@ class AdminForceEndAssignmentTests(TestCase):
 
         # But present in all sessions
         self.assertTrue(TrackingSession.objects.filter(id=self.session_a.id).exists())
+
+
+class AllAuthoritativeGPIDsAssignmentTrackingTests(TestCase):
+    """
+    Targeted test suite verifying:
+    1. Sub-15 FT idols (10 FT, 12 FT, 14 FT) are available in assignment registry.
+    2. 15 FT and 26+ FT idols remain assignable.
+    3. Main Dashboard strictly excludes sub-15 FT idols.
+    4. Assignment search finds sub-15 FT GPIDs and pandals.
+    5. Sub-15 FT GPID can be assigned with normal conditions.
+    6. Assigned but NOT_STARTED GPID does NOT appear on Live Tracking.
+    7. Sub-15 FT GPID appears on Live Tracking after valid procession start.
+    8. Live marker uses actual telemetry.
+    9. One GPID produces one live marker.
+    10. Zonal SYS_ADMIN is strictly zone-scoped.
+    11. Filters compose with AND logic.
+    12. Excel export respects filters and includes all heights.
+    """
+
+    def setUp(self):
+        from rest_framework.test import APIClient
+        self.client = APIClient()
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus, LocationPoint
+        from apps.idols.models import ProcessionState
+        from datetime import date, timedelta
+
+        self.today = date.today()
+        self.tomorrow = self.today + timedelta(days=1)
+
+        # Super Admin / Main Officer (Citywide)
+        self.super_admin = User.objects.create_superuser(
+            username='city_superadmin', password='password123', email='admin@police.gov.in'
+        )
+
+        # Zonal Sys Admin (Charminar Zone only)
+        self.zonal_sysadmin_cmr = User.objects.create_user(
+            username='sysadmin_cmr', password='password123',
+            role=UserRole.SYS_ADMIN, zone='Charminar'
+        )
+
+        # Constables
+        self.pc_cmr = User.objects.create_user(
+            username='pc_charminar', password='password123',
+            role=UserRole.CONSTABLE, police_station='Charminar', zone='Charminar',
+            police_id='PC-CMR-01', is_active=True
+        )
+        self.pc_sec = User.objects.create_user(
+            username='pc_secunderabad', password='password123',
+            role=UserRole.CONSTABLE, police_station='Gopalpuram', zone='Secunderabad',
+            police_id='PC-SEC-01', is_active=True
+        )
+
+        # Idols: Sub-15 FT
+        self.idol_10ft = Idol.objects.create(
+            gpid='HYDCMRZCMNR1010', name='Lalitha Pandal 10ft',
+            police_station='Charminar', zone='Charminar',
+            idol_height=10.0, immersion_date=self.today,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+        self.idol_12ft = Idol.objects.create(
+            gpid='HYDCMRZCMNR1012', name='Balanagar Pandal 12ft',
+            police_station='Charminar', zone='Charminar',
+            idol_height=12.0, immersion_date=self.tomorrow,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+        self.idol_14ft = Idol.objects.create(
+            gpid='HYDCMRZCMNR1014', name='Nayapul Pandal 14ft',
+            police_station='Charminar', zone='Charminar',
+            idol_height=14.0, immersion_date=self.today,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+
+        # Idols: 15+ FT
+        self.idol_18ft = Idol.objects.create(
+            gpid='HYDCMRZCMNR1018', name='Gulzar Houz 18ft',
+            police_station='Charminar', zone='Charminar',
+            idol_height=18.0, immersion_date=self.today,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+        self.idol_28ft = Idol.objects.create(
+            gpid='HYDCMRZCMNR1028', name='Charminar Grand 28ft',
+            police_station='Charminar', zone='Charminar',
+            idol_height=28.0, immersion_date=self.tomorrow,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+
+        # Idol in Secunderabad Zone
+        self.idol_sec_10ft = Idol.objects.create(
+            gpid='HYDSECZGPLP2010', name='Secunderabad Idol 10ft',
+            police_station='Gopalpuram', zone='Secunderabad',
+            idol_height=10.0, immersion_date=self.today,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+
+    def test_01_sub_15ft_idols_returned_by_assignment_registry(self):
+        """10 FT, 12 FT, and 14 FT idols are returned by the assignment registry."""
+        self.client.force_authenticate(user=self.super_admin)
+        res = self.client.get('/api/v1/assignments/registry/')
+        self.assertEqual(res.status_code, 200)
+        returned_gpids = [item['gpid'] for item in res.data['results']]
+        self.assertIn(self.idol_10ft.gpid, returned_gpids)
+        self.assertIn(self.idol_12ft.gpid, returned_gpids)
+        self.assertIn(self.idol_14ft.gpid, returned_gpids)
+        self.assertIn(self.idol_18ft.gpid, returned_gpids)
+        self.assertIn(self.idol_28ft.gpid, returned_gpids)
+
+        # Summary KPIs include count_below_15
+        summary = res.data['summary']
+        self.assertEqual(summary['count_below_15'], 4)  # 10ft, 12ft, 14ft, sec_10ft
+        self.assertEqual(summary['count_15_20'], 1)     # 18ft
+        self.assertEqual(summary['count_26_plus'], 1)  # 28ft
+
+    def test_02_main_dashboard_strictly_excludes_sub_15ft(self):
+        """Main Dashboard idol list and stats strictly enforce >= 15 FT."""
+        self.client.force_authenticate(user=self.super_admin)
+        res_list = self.client.get('/api/v1/idols/')
+        self.assertEqual(res_list.status_code, 200)
+        dashboard_gpids = [item['gpid'] for item in res_list.data['results']]
+
+        # 15+ FT present
+        self.assertIn(self.idol_18ft.gpid, dashboard_gpids)
+        self.assertIn(self.idol_28ft.gpid, dashboard_gpids)
+
+        # Sub-15 FT strictly absent from Main Dashboard
+        self.assertNotIn(self.idol_10ft.gpid, dashboard_gpids)
+        self.assertNotIn(self.idol_12ft.gpid, dashboard_gpids)
+        self.assertNotIn(self.idol_14ft.gpid, dashboard_gpids)
+        self.assertNotIn(self.idol_sec_10ft.gpid, dashboard_gpids)
+
+        # Dashboard stats total_idols only counts 15+ FT
+        res_stats = self.client.get('/api/v1/idols/dashboard/')
+        self.assertEqual(res_stats.status_code, 200)
+        self.assertEqual(res_stats.data['kpis']['total_idols'], 2)  # only 18ft and 28ft
+
+    def test_03_assignment_search_finds_sub_15ft_gpid_and_name(self):
+        """Search finds sub-15 FT idols by GPID or Pandal Name."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # Search by GPID
+        res_gpid = self.client.get(f'/api/v1/assignments/registry/?search={self.idol_10ft.gpid}')
+        self.assertEqual(res_gpid.status_code, 200)
+        self.assertEqual(len(res_gpid.data['results']), 1)
+        self.assertEqual(res_gpid.data['results'][0]['gpid'], self.idol_10ft.gpid)
+
+        # Search by Pandal Name
+        res_name = self.client.get('/api/v1/assignments/registry/?search=Lalitha')
+        self.assertEqual(res_name.status_code, 200)
+        self.assertEqual(len(res_name.data['results']), 1)
+        self.assertEqual(res_name.data['results'][0]['gpid'], self.idol_10ft.gpid)
+
+    def test_04_sub_15ft_idol_assignable_subject_to_station_matching(self):
+        """Sub-15 FT idol can be assigned when officer matches station and zone."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # Eligible officers returns matching constable
+        res_eligible = self.client.get(f'/api/v1/assignments/registry/{self.idol_10ft.gpid}/eligible-officers/')
+        self.assertEqual(res_eligible.status_code, 200)
+        officer_ids = [o['id'] for o in res_eligible.data['officers']]
+        self.assertIn(self.pc_cmr.id, officer_ids)
+        self.assertNotIn(self.pc_sec.id, officer_ids)  # Wrong station
+
+        # Assign succeeds
+        res_assign = self.client.post('/api/v1/assignments/create/', {
+            'gpid': self.idol_10ft.gpid,
+            'constable_id': self.pc_cmr.id
+        })
+        self.assertEqual(res_assign.status_code, 201)
+        self.assertTrue(Assignment.objects.filter(idol=self.idol_10ft, constable=self.pc_cmr, is_active=True).exists())
+
+    def test_05_assigned_but_not_started_does_not_appear_on_live_tracking(self):
+        """Assigned GPID without started tracking session does NOT appear on Live Tracking."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # Assign 10 FT idol
+        Assignment.assign_constable(idol=self.idol_10ft, constable=self.pc_cmr, assigned_by=self.super_admin)
+
+        # Check live tracking endpoint
+        res_tracking = self.client.get('/api/v1/tracking/active/')
+        self.assertEqual(res_tracking.status_code, 200)
+        live_gpids = [m['gpid'] for m in res_tracking.data]
+        self.assertNotIn(self.idol_10ft.gpid, live_gpids)
+
+    def test_06_started_sub_15ft_idol_appears_on_live_tracking_with_telemetry(self):
+        """Sub-15 FT idol appears on Live Tracking after procession starts with real GPS."""
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus, LocationPoint
+        from django.utils import timezone
+
+        self.client.force_authenticate(user=self.super_admin)
+        assignment = Assignment.assign_constable(idol=self.idol_10ft, constable=self.pc_cmr, assigned_by=self.super_admin)
+
+        # Start tracking session
+        session = TrackingSession.objects.create(
+            assignment=assignment,
+            status=TrackingSessionStatus.ACTIVE,
+            started_at=timezone.now()
+        )
+        # Ingest telemetry point
+        telemetry_lat = 17.3616
+        telemetry_lon = 78.4747
+        LocationPoint.objects.create(
+            session=session,
+            latitude=telemetry_lat,
+            longitude=telemetry_lon,
+            speed=2.5,
+            heading=90.0,
+            accuracy=5.0,
+            recorded_at=timezone.now()
+        )
+
+        res_tracking = self.client.get('/api/v1/tracking/active/')
+        self.assertEqual(res_tracking.status_code, 200)
+        live_markers = {m['gpid']: m for m in res_tracking.data}
+        self.assertIn(self.idol_10ft.gpid, live_markers)
+
+        marker = live_markers[self.idol_10ft.gpid]
+        self.assertAlmostEqual(marker['latitude'], telemetry_lat, places=4)
+        self.assertAlmostEqual(marker['longitude'], telemetry_lon, places=4)
+        self.assertEqual(marker['idol_height'], 10.0)
+
+    def test_07_one_gpid_produces_one_live_marker(self):
+        """Even with multiple location points, exactly one marker per active GPID is returned."""
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus, LocationPoint
+        from django.utils import timezone
+
+        self.client.force_authenticate(user=self.super_admin)
+        assignment = Assignment.assign_constable(idol=self.idol_14ft, constable=self.pc_cmr, assigned_by=self.super_admin)
+        session = TrackingSession.objects.create(
+            assignment=assignment,
+            status=TrackingSessionStatus.ACTIVE,
+            started_at=timezone.now()
+        )
+        # Create multiple telemetry points
+        for i in range(5):
+            LocationPoint.objects.create(
+                session=session,
+                latitude=17.3600 + (i * 0.001),
+                longitude=78.4700 + (i * 0.001),
+                recorded_at=timezone.now() - timedelta(minutes=5 - i)
+            )
+
+        res_tracking = self.client.get('/api/v1/tracking/active/')
+        self.assertEqual(res_tracking.status_code, 200)
+        matching = [m for m in res_tracking.data if m['gpid'] == self.idol_14ft.gpid]
+        self.assertEqual(len(matching), 1)
+
+    def test_08_zonal_sysadmin_strictly_zone_scoped(self):
+        """Zonal SYS_ADMIN can only see and assign GPIDs in their own zone."""
+        self.client.force_authenticate(user=self.zonal_sysadmin_cmr)
+
+        # Registry only returns Charminar idols
+        res = self.client.get('/api/v1/assignments/registry/')
+        self.assertEqual(res.status_code, 200)
+        gpids = [item['gpid'] for item in res.data['results']]
+        self.assertIn(self.idol_10ft.gpid, gpids)
+        self.assertNotIn(self.idol_sec_10ft.gpid, gpids)
+
+        # Attempting query parameter override for Secunderabad fails to leak records
+        res_override = self.client.get('/api/v1/assignments/registry/?zone=Secunderabad')
+        self.assertEqual(res_override.status_code, 200)
+        self.assertEqual(len(res_override.data['results']), 0)
+
+        # Cannot assign idol in Secunderabad
+        res_assign = self.client.post('/api/v1/assignments/create/', {
+            'gpid': self.idol_sec_10ft.gpid,
+            'constable_id': self.pc_sec.id
+        })
+        self.assertEqual(res_assign.status_code, 400)
+        self.assertIn('outside your assigned zone', str(res_assign.data).lower())
+
+    def test_09_and_filter_composition_across_all_heights(self):
+        """Filters compose using AND logic across Zone, PS, Height, Visarjan Date, and Status."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # Zone=Charminar + PS=Charminar + Height=below_15 + Date=today + Status=unassigned
+        res = self.client.get(
+            f'/api/v1/assignments/registry/?zone=Charminar&police_station=Charminar&height_bucket=below_15&visarjan_date=today&assignment_status=unassigned'
+        )
+        self.assertEqual(res.status_code, 200)
+        gpids = [item['gpid'] for item in res.data['results']]
+        # 10ft and 14ft match all 5 conditions (today, below 15, unassigned, charminar)
+        self.assertIn(self.idol_10ft.gpid, gpids)
+        self.assertIn(self.idol_14ft.gpid, gpids)
+        # 12ft does not match (visarjan_date is tomorrow)
+        self.assertNotIn(self.idol_12ft.gpid, gpids)
+        # 18ft does not match (height is 18ft)
+        self.assertNotIn(self.idol_18ft.gpid, gpids)
+
+    def test_10_assignment_excel_export_respects_filters_and_includes_sub_15ft(self):
+        """Excel export includes sub-15 FT idols and respects filters."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # Export with height_bucket=below_15
+        res = self.client.get('/api/v1/assignments/export/?height_bucket=below_15')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res['Content-Type'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        self.assertGreater(len(res.content), 1000)
+
 
 

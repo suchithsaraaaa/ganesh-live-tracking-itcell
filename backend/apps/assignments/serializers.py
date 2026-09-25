@@ -69,12 +69,6 @@ class CreateAssignmentSerializer(serializers.Serializer):
         except User.DoesNotExist:
             raise serializers.ValidationError({'constable_id': f'User with ID {constable_id} does not exist.'})
 
-        # Rule 1 & 29: Absolute Eligibility Rule — Minimum 15 FT
-        if not idol.idol_height or idol.idol_height < 15:
-            raise serializers.ValidationError({
-                'gpid': f"Idol {idol.gpid} (height {idol.idol_height or 0} FT) is ineligible for assignment. Minimum required height is 15 FT."
-            })
-
         # Rule 16: Eligible Officer Rules
         if not constable.is_active:
             raise serializers.ValidationError({
@@ -188,15 +182,17 @@ class AssignableIdolRegistrySerializer(serializers.ModelSerializer):
 
     def get_height_bucket(self, obj):
         if obj.idol_height is None:
-            return None
+            return 'below_15'
         h = float(obj.idol_height)
-        if 15.0 <= h < 21.0:
+        if h < 15.0:
+            return 'below_15'
+        elif 15.0 <= h < 21.0:
             return '15-20'
         elif 21.0 <= h < 26.0:
             return '21-25'
         elif h >= 26.0:
             return '26+'
-        return None
+        return 'below_15'
 
     def get_height_classification(self, obj):
         if obj.idol_height is None:

@@ -42,14 +42,21 @@ import { LoadingState, EmptyState, ErrorState } from '../components/shared/State
 export const AssignmentsPage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = !!user && (user.role === 'MAIN_OFFICER' || (user as any).is_superuser);
+  const isCityWide = !!user && (
+    Boolean((user as any).is_superuser) ||
+    user.role === 'SUPER_ADMIN' ||
+    (user.role === 'MAIN_OFFICER' && !user.zone)
+  );
+  const userZone = user?.zone?.trim() || null;
+  const isZonedUser = !isCityWide && !!userZone;
 
   // Navigation View State
   const [activeTab, setActiveTab] = useState<'console' | 'history'>('console');
 
   // Filter Bar State
-  const [selectedZone, setSelectedZone] = useState<string>('All Zones');
+  const [selectedZone, setSelectedZone] = useState<string>(isZonedUser && userZone ? userZone : 'All Zones');
   const [selectedStation, setSelectedStation] = useState<string>('All Police Stations');
-  const [selectedHeight, setSelectedHeight] = useState<HeightBucketFilter>('all_15_plus');
+  const [selectedHeight, setSelectedHeight] = useState<HeightBucketFilter>('all');
   const [selectedStatus, setSelectedStatus] = useState<AssignmentStatusFilter>('all');
   const [visarjanDateMode, setVisarjanDateMode] = useState<VisarjanDateFilter>('all');
   const [customVisarjanDate, setCustomVisarjanDate] = useState<string>('');
@@ -141,8 +148,16 @@ export const AssignmentsPage: React.FC = () => {
       .sort();
   }, [policeStations, selectedZone]);
 
+  // Synchronize zone for zoned users
+  useEffect(() => {
+    if (isZonedUser && userZone) {
+      setSelectedZone(userZone);
+    }
+  }, [isZonedUser, userZone]);
+
   // Reset station if selected zone no longer includes it
   const handleZoneChange = (zone: string) => {
+    if (isZonedUser && userZone) return;
     setSelectedZone(zone);
     setSelectedStation('All Police Stations');
     setCurrentPage(1);
@@ -351,9 +366,9 @@ export const AssignmentsPage: React.FC = () => {
 
   // Reset Filters
   const handleResetFilters = () => {
-    setSelectedZone('All Zones');
+    setSelectedZone(isZonedUser && userZone ? userZone : 'All Zones');
     setSelectedStation('All Police Stations');
-    setSelectedHeight('all_15_plus');
+    setSelectedHeight('all');
     setSelectedStatus('all');
     setVisarjanDateMode('all');
     setCustomVisarjanDate('');
@@ -362,9 +377,9 @@ export const AssignmentsPage: React.FC = () => {
   };
 
   const isFiltered =
-    selectedZone !== 'All Zones' ||
+    selectedZone !== (isZonedUser && userZone ? userZone : 'All Zones') ||
     selectedStation !== 'All Police Stations' ||
-    selectedHeight !== 'all_15_plus' ||
+    selectedHeight !== 'all' ||
     selectedStatus !== 'all' ||
     visarjanDateMode !== 'all' ||
     Boolean(searchQuery.trim());
@@ -385,9 +400,16 @@ export const AssignmentsPage: React.FC = () => {
         </span>
       );
     }
+    if (bucket === '15-20' || (height >= 15 && height < 21)) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 mono">
+          {height} FT &bull; 15–20 FT
+        </span>
+      );
+    }
     return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 mono">
-        {height} FT &bull; 15–20 FT
+      <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 mono">
+        {height ? `${height} FT` : '<15 FT'} &bull; Below 15 FT
       </span>
     );
   };
@@ -411,11 +433,11 @@ export const AssignmentsPage: React.FC = () => {
               Officer Assignment
             </h1>
             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 tracking-wider">
-              15 FT+ MANDATORY
+              ALL GPIDs ASSIGNABLE
             </span>
           </div>
           <p className="text-xs text-text-tertiary mt-1">
-            Assign eligible ground staff to registered Ganesh idols 15 FT and above.
+            Assign eligible ground staff to registered Ganesh idols across all heights.
           </p>
         </div>
 
@@ -463,19 +485,26 @@ export const AssignmentsPage: React.FC = () => {
               {/* Zone Filter */}
               <div>
                 <label className="block text-[10px] uppercase font-bold text-text-tertiary mb-1">
-                  Zone
+                  Zone {isZonedUser && <span className="text-[9px] text-accent font-normal lowercase">(locked)</span>}
                 </label>
                 <select
                   value={selectedZone}
+                  disabled={isZonedUser}
                   onChange={(e) => handleZoneChange(e.target.value)}
-                  className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent"
+                  className={`w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent ${
+                    isZonedUser ? 'opacity-80 cursor-not-allowed' : ''
+                  }`}
                 >
-                  <option value="All Zones">All Zones</option>
-                  {availableZones.map((z) => (
-                    <option key={z} value={z}>
-                      {z}
-                    </option>
-                  ))}
+                  {!isZonedUser && <option value="All Zones">All Zones</option>}
+                  {isZonedUser && userZone ? (
+                    <option value={userZone}>{userZone}</option>
+                  ) : (
+                    availableZones.map((z) => (
+                      <option key={z} value={z}>
+                        {z}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
 
@@ -514,8 +543,11 @@ export const AssignmentsPage: React.FC = () => {
                   }}
                   className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent font-medium"
                 >
-                  <option value="all_15_plus">
-                    All 15+ FT ({summary ? summary.total_eligible : '…'})
+                  <option value="all">
+                    All Heights ({summary ? summary.total_eligible : '…'})
+                  </option>
+                  <option value="below_15">
+                    Below 15 FT ({summary ? (summary.count_below_15 ?? '…') : '…'})
                   </option>
                   <option value="15_20">
                     15–20 FT ({summary ? summary.count_15_20 : '…'})
@@ -614,7 +646,7 @@ export const AssignmentsPage: React.FC = () => {
 
           {/* Operational Summary Cards */}
           <div className="px-6 py-3.5 bg-elevated-1/50 border-b border-border-subtle shrink-0">
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
               {/* Total Eligible */}
               <div className="p-3 bg-elevated rounded border border-border-default shadow-sm">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-text-tertiary">
@@ -623,7 +655,18 @@ export const AssignmentsPage: React.FC = () => {
                 <div className="text-xl font-bold text-text-primary mt-0.5 mono">
                   {summary ? summary.total_eligible : '—'}
                 </div>
-                <div className="text-[10px] text-accent font-medium mt-0.5">15 FT and above</div>
+                <div className="text-[10px] text-accent font-medium mt-0.5">All Heights</div>
+              </div>
+
+              {/* Below 15 FT */}
+              <div className="p-3 bg-cyan-950/20 rounded border border-cyan-500/25 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-cyan-400">
+                  BELOW 15 FT
+                </div>
+                <div className="text-xl font-bold text-cyan-300 mt-0.5 mono">
+                  {summary ? (summary.count_below_15 ?? '—') : '—'}
+                </div>
+                <div className="text-[10px] text-text-tertiary mt-0.5">Sub-15 FT</div>
               </div>
 
               {/* 15-20 FT */}
@@ -692,10 +735,10 @@ export const AssignmentsPage: React.FC = () => {
                 <Filter className="w-8 h-8 mx-auto text-text-tertiary" />
                 <h3 className="text-sm font-semibold text-text-primary">No eligible GPIDs found</h3>
                 <p className="text-xs text-text-tertiary max-w-md mx-auto">
-                  No idols (≥15 FT) match the current filter criteria:
+                  No idols match the current filter criteria:
                   {selectedZone !== 'All Zones' && ` Zone: ${selectedZone};`}
                   {selectedStation !== 'All Police Stations' && ` Police Station: ${selectedStation};`}
-                  {selectedHeight !== 'all_15_plus' && ` Height: ${selectedHeight};`}
+                  {selectedHeight !== 'all' && ` Height: ${selectedHeight};`}
                   {selectedStatus !== 'all' && ` Status: ${selectedStatus};`}
                   {debouncedSearch && ` Search: "${debouncedSearch}".`}
                 </p>
