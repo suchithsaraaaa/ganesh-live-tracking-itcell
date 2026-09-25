@@ -17,14 +17,39 @@ class AssignmentListView(generics.ListAPIView):
 
     def get_queryset(self):
         qs = Assignment.objects.select_related('idol', 'constable', 'assigned_by').all()
-        # Rule 1: Only 15+ FT idols are eligible for the assignment workflow
-        qs = qs.filter(idol__idol_height__gte=15)
 
         # Filter through idol jurisdiction
         if self.request.user.role == 'CONSTABLE':
             qs = qs.filter(constable=self.request.user)
         else:
             qs = filter_by_jurisdiction(qs, self.request.user, ps_field='idol__police_station', zone_field='idol__zone', division_field='idol__division')
+
+        # Optional Zone & Police Station filters
+        zone = self.request.query_params.get('zone')
+        if zone and zone not in ['All Zones', 'all', '']:
+            from common.zones import zone_filter_q
+            qs = qs.filter(zone_filter_q('idol__zone', zone.strip()))
+
+        ps = self.request.query_params.get('police_station')
+        if ps and ps not in ['All Police Stations', 'all', '']:
+            from common.zones import ps_filter_q
+            qs = qs.filter(ps_filter_q('idol__police_station', ps.strip()))
+
+        # Optional height bucket filter
+        hb = self.request.query_params.get('height_bucket')
+        if hb and hb not in ['All Heights', 'all', 'all_heights', '']:
+            hb_clean = hb.lower().strip()
+            from django.db.models import Q
+            if hb_clean in ['below_15', 'below-15', 'under_15', '<15', 'subthreshold']:
+                qs = qs.filter(Q(idol__idol_height__lt=15) | Q(idol__idol_height__isnull=True))
+            elif hb_clean in ['15_20', '15-20', 'green']:
+                qs = qs.filter(idol__idol_height__gte=15, idol__idol_height__lte=20)
+            elif hb_clean in ['21_25', '21-25', 'yellow']:
+                qs = qs.filter(idol__idol_height__gte=21, idol__idol_height__lte=25)
+            elif hb_clean in ['26_plus', '26+', 'above_25', 'red']:
+                qs = qs.filter(idol__idol_height__gte=26)
+            elif hb_clean in ['all_15_plus', '15_plus', '15+']:
+                qs = qs.filter(idol__idol_height__gte=15)
 
         is_active_param = self.request.query_params.get('is_active')
         if is_active_param is not None:
@@ -280,22 +305,7 @@ class AssignableIdolRegistryView(APIView):
                 Q(police_station__icontains=search)
             )
 
-        # 5. Height bucket filter (AND composition)
-        hb = request.query_params.get('height_bucket')
-        if hb and hb not in ['All Heights', 'all', 'all_heights', '']:
-            hb_clean = hb.lower().strip()
-            if hb_clean in ['below_15', 'below-15', 'under_15', '<15', 'subthreshold']:
-                qs = qs.filter(Q(idol_height__lt=15) | Q(idol_height__isnull=True))
-            elif hb_clean in ['15_20', '15-20', 'green']:
-                qs = qs.filter(idol_height__gte=15, idol_height__lt=21)
-            elif hb_clean in ['21_25', '21-25', 'yellow']:
-                qs = qs.filter(idol_height__gte=21, idol_height__lt=26)
-            elif hb_clean in ['26_plus', '26+', 'above_25', 'red']:
-                qs = qs.filter(idol_height__gte=26)
-            elif hb_clean in ['all_15_plus', '15_plus', '15+']:
-                qs = qs.filter(idol_height__gte=15)
-
-        # 6. Assignment status filter (AND composition)
+        # 5. Assignment status filter (AND composition)
         assignment_status = request.query_params.get('assignment_status')
         if assignment_status and assignment_status.lower() != 'all':
             astat = assignment_status.lower().strip()
@@ -304,12 +314,15 @@ class AssignableIdolRegistryView(APIView):
             elif astat == 'unassigned':
                 qs = qs.exclude(assignments__is_active=True)
 
-        # Rule 10 & Addendum: Authoritative summary KPIs computed on this EXACT filtered population!
-        total_eligible = qs.count()
-        height_aggs = qs.aggregate(
+        # Base eligible queryset: ALL eligible idols in the active scope (jurisdiction, zone, PS, date, search, status)
+        base_eligible_qs = qs
+
+        # Authoritative summary KPIs computed on this entire eligible set (does NOT zero out other height categories)
+        total_eligible = base_eligible_qs.count()
+        height_aggs = base_eligible_qs.aggregate(
             count_below_15=Count('id', filter=Q(idol_height__lt=15) | Q(idol_height__isnull=True)),
-            count_15_20=Count('id', filter=Q(idol_height__gte=15, idol_height__lt=21)),
-            count_21_25=Count('id', filter=Q(idol_height__gte=21, idol_height__lt=26)),
+            count_15_20=Count('id', filter=Q(idol_height__gte=15, idol_height__lte=20)),
+            count_21_25=Count('id', filter=Q(idol_height__gte=21, idol_height__lte=25)),
             count_26_plus=Count('id', filter=Q(idol_height__gte=26)),
         )
         count_below_15 = height_aggs['count_below_15'] or 0
@@ -324,8 +337,23 @@ class AssignableIdolRegistryView(APIView):
             assigned_count = 0
             unassigned_count = total_eligible
         else:
-            assigned_count = qs.filter(assignments__is_active=True).distinct().count()
+            assigned_count = base_eligible_qs.filter(assignments__is_active=True).distinct().count()
             unassigned_count = max(0, total_eligible - assigned_count)
+
+        # 6. Optional height bucket filter applied to the paginated record set
+        hb = request.query_params.get('height_bucket')
+        if hb and hb not in ['All Heights', 'all', 'all_heights', '']:
+            hb_clean = hb.lower().strip()
+            if hb_clean in ['below_15', 'below-15', 'under_15', '<15', 'subthreshold']:
+                qs = qs.filter(Q(idol_height__lt=15) | Q(idol_height__isnull=True))
+            elif hb_clean in ['15_20', '15-20', 'green']:
+                qs = qs.filter(idol_height__gte=15, idol_height__lte=20)
+            elif hb_clean in ['21_25', '21-25', 'yellow']:
+                qs = qs.filter(idol_height__gte=21, idol_height__lte=25)
+            elif hb_clean in ['26_plus', '26+', 'above_25', 'red']:
+                qs = qs.filter(idol_height__gte=26)
+            elif hb_clean in ['all_15_plus', '15_plus', '15+']:
+                qs = qs.filter(idol_height__gte=15)
 
         # Rule 12: Operational sorting (Zone -> Police Station -> Height -> GPID)
         ordering = request.query_params.get('ordering')
@@ -471,9 +499,9 @@ class AssignableIdolDetailView(APIView):
         can_view_contact = request.user.role in ['MAIN_OFFICER', 'ACP', 'SHO'] or request.user.is_superuser
         raw_meta = idol.raw_metadata or {}
 
-        height_val = float(idol.idol_height)
-        height_bucket = '15-20' if 15.0 <= height_val < 21.0 else ('21-25' if 21.0 <= height_val < 26.0 else '26+')
-        height_class = 'GREEN' if 15.0 <= height_val < 21.0 else ('YELLOW' if 21.0 <= height_val < 26.0 else 'RED')
+        height_val = float(idol.idol_height) if idol.idol_height is not None else 0.0
+        height_bucket = 'below_15' if height_val < 15.0 else ('15-20' if 15.0 <= height_val <= 20.0 else ('21-25' if 21.0 <= height_val <= 25.0 else '26+'))
+        height_class = 'SUBTHRESHOLD' if height_val < 15.0 else ('GREEN' if 15.0 <= height_val <= 20.0 else ('YELLOW' if 21.0 <= height_val <= 25.0 else 'RED'))
 
         return Response({
             'id': idol.id,

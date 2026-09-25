@@ -551,13 +551,13 @@ export const AssignmentsPage: React.FC = () => {
                     Below 15 FT ({summary ? (summary.count_below_15 ?? '…') : '…'})
                   </option>
                   <option value="15_20">
-                    15–20 FT ({summary ? summary.count_15_20 : '…'})
+                    15–20 FT (Green) ({summary ? summary.count_15_20 : '…'})
                   </option>
                   <option value="21_25">
-                    21–25 FT ({summary ? summary.count_21_25 : '…'})
+                    21–25 FT (Yellow) ({summary ? summary.count_21_25 : '…'})
                   </option>
                   <option value="26_plus">
-                    26 FT+ ({summary ? summary.count_26_plus : '…'})
+                    26+ FT (Red) ({summary ? summary.count_26_plus : '…'})
                   </option>
                 </select>
               </div>
@@ -673,7 +673,7 @@ export const AssignmentsPage: React.FC = () => {
               {/* 15-20 FT */}
               <div className="p-3 bg-emerald-950/20 rounded border border-emerald-500/25 shadow-sm">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                  15–20 FT
+                  15–20 FT (Green)
                 </div>
                 <div className="text-xl font-bold text-emerald-300 mt-0.5 mono">
                   {summary ? summary.count_15_20 : '—'}
@@ -684,7 +684,7 @@ export const AssignmentsPage: React.FC = () => {
               {/* 21-25 FT */}
               <div className="p-3 bg-amber-950/20 rounded border border-amber-500/25 shadow-sm">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-amber-400">
-                  21–25 FT
+                  21–25 FT (Yellow)
                 </div>
                 <div className="text-xl font-bold text-amber-300 mt-0.5 mono">
                   {summary ? summary.count_21_25 : '—'}
@@ -695,7 +695,7 @@ export const AssignmentsPage: React.FC = () => {
               {/* 26 FT+ */}
               <div className="p-3 bg-rose-950/20 rounded border border-rose-500/25 shadow-sm">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-rose-400">
-                  26 FT+
+                  26+ FT (Red)
                 </div>
                 <div className="text-xl font-bold text-rose-300 mt-0.5 mono">
                   {summary ? summary.count_26_plus : '—'}

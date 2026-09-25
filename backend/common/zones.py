@@ -112,6 +112,19 @@ def zone_filter_q(field_name: str, val: str | None) -> Q:
 
 import re
 
+# Map known spelling / phonetic variants to a canonical lowercase alphanumeric key
+_PS_CANONICAL_KEY_MAP = {
+    'rajendranagar': 'rajendranagar',
+    'rajendranagarps': 'rajendranagar',
+    'rajendranagarpolicestation': 'rajendranagar',
+    'bhavaninagar': 'bhavaninagar',
+    'reinbazar': 'reinbazar',
+    'langerhouse': 'langarhouse',
+    'langarhouse': 'langarhouse',
+    'medipatnam': 'mehdipatnam',
+    'mehdipatnam': 'mehdipatnam',
+}
+
 # Canonical police station alias mapping for known spelling / phonetic variants across tables
 _PS_CANONICAL_INDEX = {
     'rajendranagar': 'Rajendranagar',
@@ -135,8 +148,8 @@ def _clean_ps_key(val: str | None) -> str:
         return ''
     cleaned = str(val).strip()
     base = re.sub(r'\b(police\s*station|ps)\b', '', cleaned, flags=re.IGNORECASE).strip()
-    key = re.sub(r'[^a-zA-Z0-9]', '', base).lower()
-    return _PS_CANONICAL_INDEX.get(key, key)
+    raw_key = re.sub(r'[^a-zA-Z0-9]', '', base).lower()
+    return _PS_CANONICAL_KEY_MAP.get(raw_key, raw_key)
 
 
 def normalize_ps_name(val: str | None) -> str | None:
