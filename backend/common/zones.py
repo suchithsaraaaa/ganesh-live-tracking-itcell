@@ -56,19 +56,30 @@ def normalize_zone(val: str | None) -> str | None:
 
 def get_zone_variants(val: str | None) -> list[str]:
     """
-    Returns all common representations (with space, without space, canonical, raw)
-    so queries match records across models regardless of legacy spacing in secondary tables.
-    E.g. for 'Rajendra Nagar': ['Rajendra Nagar', 'Rajendranagar']
+    Returns all common representations (with space, without space, canonical, raw,
+    title case, capitalized, and lowercase) so queries match records across models
+    regardless of legacy spacing or casing in secondary tables.
+    E.g. for 'Rajendra Nagar': ['Rajendra Nagar', 'Rajendranagar', 'RajendraNagar', 'rajendranagar', 'rajendra nagar']
     """
     if not val:
         return []
     cleaned = str(val).strip()
-    canonical = normalize_zone(cleaned)
-    variants = {cleaned}
-    if canonical:
-        variants.add(canonical)
-        variants.add(canonical.replace(' ', ''))
-    return list(variants)
+    canonical = normalize_zone(cleaned) or cleaned
+    nospace = canonical.replace(' ', '').replace('-', '').replace('_', '')
+
+    variants = {
+        cleaned,
+        cleaned.lower(),
+        canonical,
+        canonical.lower(),
+        canonical.upper(),
+        nospace,
+        nospace.capitalize(),
+        nospace.lower(),
+        nospace.upper(),
+    }
+    return sorted(list(variants))
+
 
 
 def zone_filter_q(field_name: str, val: str | None) -> Q:
