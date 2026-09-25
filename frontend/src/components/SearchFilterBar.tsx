@@ -75,10 +75,11 @@ export const SearchFilterBar: React.FC<SearchFilterBarProps> = ({
             className="bg-elevated-2 border border-border-default rounded-md px-2.5 py-2 text-text-secondary focus:outline-none focus:border-accent font-medium"
             title="Height Classification"
           >
-            <option value="ALL">All 15+ ft</option>
-            <option value="15_20">15–20 ft (Green)</option>
-            <option value="21_25">21–25 ft (Yellow)</option>
-            <option value="above_25">26+ ft (Red)</option>
+            <option value="ALL">All Heights</option>
+            <option value="below_15">Below 15 FT</option>
+            <option value="15_20">15–20 FT (Green)</option>
+            <option value="21_25">21–25 FT (Yellow)</option>
+            <option value="above_25">26+ FT (Red)</option>
           </select>
         </div>
       )}
