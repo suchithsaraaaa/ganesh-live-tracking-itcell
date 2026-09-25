@@ -44,7 +44,7 @@ class CreateAssignmentView(APIView):
     """
     Create a new active assignment. Accessible to Station Officers (SHO) and above.
     """
-    permission_classes = [IsStationOfficerOrAbove]
+    permission_classes = [CanAssignFieldOfficers]
 
     def post(self, request):
         serializer = CreateAssignmentSerializer(data=request.data, context={'request': request})
@@ -167,23 +167,19 @@ class EndAssignmentView(APIView):
 
             # Enforce server-side jurisdiction
             user = request.user
-            is_admin = user.is_superuser or user.role == 'MAIN_OFFICER'
+            from common.permissions import check_user_jurisdiction_over_idol
+            allowed, err_msg = check_user_jurisdiction_over_idol(user, assignment.idol)
+            if not allowed:
+                return Response(
+                    {'error': err_msg or 'Permission denied.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
-            if not is_admin:
-                if user.role == 'ACP':
-                    if user.zone and assignment.idol.zone and assignment.idol.zone.lower() != user.zone.lower():
-                        return Response(
-                            {'error': 'You do not have jurisdiction to end assignments in this zone.'},
-                            status=status.HTTP_403_FORBIDDEN
-                        )
-                elif user.role == 'SHO':
-                    if user.police_station and assignment.idol.police_station and assignment.idol.police_station.lower() != user.police_station.lower():
-                        return Response(
-                            {'error': 'You do not have jurisdiction to end assignments in this police station.'},
-                            status=status.HTTP_403_FORBIDDEN
-                        )
-                else:
-                    return Response({'error': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+            # Determine administrative privilege for force-ending assignments with active tracking
+            is_admin = bool(
+                user.is_superuser
+                or user.role in ['SUPER_ADMIN', 'MAIN_OFFICER', 'SYS_ADMIN']
+            )
 
             # Active tracking session safety check
             active_session = TrackingSession.objects.filter(
@@ -252,7 +248,8 @@ class AssignableIdolRegistryView(APIView):
         # 2. Police Station filter
         ps = request.query_params.get('police_station')
         if ps and ps not in ['All Police Stations', 'all', '']:
-            qs = qs.filter(police_station__iexact=ps.strip())
+            from common.zones import ps_filter_q
+            qs = qs.filter(ps_filter_q('police_station', ps.strip()))
 
         # 3. Visarjan Date filter (AND composition with Asia/Kolkata local date)
         visarjan_date = request.query_params.get('visarjan_date')
@@ -552,11 +549,13 @@ class AssignableEligibleOfficersView(APIView):
         )
 
         # Constables matching idol's police station and zone
+        from common.zones import zone_filter_q, ps_filter_q
         qs = User.objects.filter(
             role='CONSTABLE',
             is_active=True,
-            police_station__iexact=idol.police_station.strip(),
-            zone__iexact=idol.zone.strip(),
+        ).filter(
+            ps_filter_q('police_station', idol.police_station.strip()),
+            zone_filter_q('zone', idol.zone.strip()),
         ).exclude(
             id__in=active_assigned_constable_ids
         ).order_by('first_name', 'last_name', 'username')
@@ -620,7 +619,8 @@ class AssignmentExportExcelView(APIView):
 
         ps = request.query_params.get('police_station')
         if ps and ps not in ['All Police Stations', 'all', '']:
-            qs = qs.filter(police_station__iexact=ps.strip())
+            from common.zones import ps_filter_q
+            qs = qs.filter(ps_filter_q('police_station', ps.strip()))
 
         hb = request.query_params.get('height_bucket')
         if hb and hb not in ['All Heights', 'all', 'all_heights', '']:

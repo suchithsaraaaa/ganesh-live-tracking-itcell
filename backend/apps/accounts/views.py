@@ -263,12 +263,14 @@ class AssignableOfficerDirectoryView(APIView):
         # Jurisdiction filter
         if caller.role == UserRole.SHO:
             if caller.police_station:
-                qs = qs.filter(police_station__iexact=caller.police_station)
+                from common.zones import ps_filter_q
+                qs = qs.filter(ps_filter_q('police_station', caller.police_station))
             else:
                 qs = qs.none()
         elif caller.role == UserRole.ACP:
             if user_zone:
-                qs = qs.filter(zone__iexact=user_zone)
+                from common.zones import zone_filter_q
+                qs = qs.filter(zone_filter_q('zone', user_zone))
             elif caller.division:
                 qs = qs.filter(division__iexact=caller.division)
             else:
@@ -287,17 +289,18 @@ class AssignableOfficerDirectoryView(APIView):
         # Optional zone filter if authorized
         requested_zone = request.query_params.get('zone')
         if requested_zone:
-            from common.zones import normalize_zone, zone_filter_q
-            if not caller.is_superuser and user_zone and normalize_zone(user_zone).lower() != normalize_zone(requested_zone).lower():
+            from common.zones import are_same_zone, zone_filter_q
+            if not caller.is_superuser and user_zone and not are_same_zone(user_zone, requested_zone):
                 return Response({'error': 'Cannot view officers outside your zone jurisdiction.'}, status=status.HTTP_403_FORBIDDEN)
             qs = qs.filter(zone_filter_q('zone', requested_zone))
 
         # Optional station filter if authorized
         requested_ps = request.query_params.get('police_station')
         if requested_ps:
-            if caller.role == UserRole.SHO and caller.police_station.lower() != requested_ps.lower():
+            from common.zones import are_same_ps, ps_filter_q
+            if caller.role == UserRole.SHO and not are_same_ps(caller.police_station, requested_ps):
                 return Response({'error': 'Cannot view officers outside your police station jurisdiction.'}, status=status.HTTP_403_FORBIDDEN)
-            qs = qs.filter(police_station__iexact=requested_ps)
+            qs = qs.filter(ps_filter_q('police_station', requested_ps))
 
         search = request.query_params.get('search')
         if search:

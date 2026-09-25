@@ -1520,4 +1520,337 @@ class RajendraNagarZoneAssignmentTests(TestCase):
         self.assertEqual(res_override.data['count'], 0)
 
 
+class RajendraNagarJurisdictionAndEndAssignmentTests(TestCase):
+    """
+    Authoritative test suite for the URGENT Production Hotfix:
+    Covers all 12 required test cases for canonical zone/PS jurisdiction matching
+    and End Assignment authorization.
+    """
+
+    def setUp(self):
+        from rest_framework.test import APIClient
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus, LocationPoint, IdolEvent
+        self.client = APIClient()
+
+        # Users
+        self.superuser = User.objects.create_superuser(
+            username='super_admin_rn',
+            password='password123',
+            email='super@example.com'
+        )
+
+        self.main_officer = User.objects.create_user(
+            username='main_officer_citywide',
+            password='password123',
+            role=UserRole.MAIN_OFFICER,
+            zone=''
+        )
+
+        self.sho_attapur = User.objects.create_user(
+            username='sho_attapur',
+            password='password123',
+            role=UserRole.SHO,
+            zone='Rajendra Nagar',
+            police_station='Attapur'
+        )
+
+        # Legacy spelling user
+        self.sho_rajendranagar_legacy = User.objects.create_user(
+            username='sho_rn_legacy',
+            password='password123',
+            role=UserRole.SHO,
+            zone='Rajendranagar',
+            police_station='Rajendranagar'
+        )
+
+        self.sysadmin_rn = User.objects.create_user(
+            username='sysadmin_rn',
+            password='password123',
+            role=UserRole.SYS_ADMIN,
+            zone='Rajendra Nagar'
+        )
+
+        self.sho_charminar = User.objects.create_user(
+            username='sho_charminar',
+            password='password123',
+            role=UserRole.SHO,
+            zone='Charminar',
+            police_station='Charminar'
+        )
+
+        self.constable_attapur = User.objects.create_user(
+            username='pc_attapur_1',
+            password='password123',
+            role=UserRole.CONSTABLE,
+            zone='Rajendra Nagar',
+            police_station='Attapur',
+            police_id='PC-ATPR-01'
+        )
+
+        self.constable_rn_legacy = User.objects.create_user(
+            username='pc_rn_legacy',
+            password='password123',
+            role=UserRole.CONSTABLE,
+            zone='Rajendranagar',
+            police_station='Rajendranagar',
+            police_id='PC-RJNR-01'
+        )
+
+        self.constable_chandrayangutta = User.objects.create_user(
+            username='pc_chng_1',
+            password='password123',
+            role=UserRole.CONSTABLE,
+            zone='Rajendra Nagar',
+            police_station='Chandrayangutta',
+            police_id='PC-CHNG-01'
+        )
+
+        # Idols
+        self.idol_attapur = Idol.objects.create(
+            gpid='HYDRNZATPR0001',
+            name='Attapur Idol 1',
+            zone='Rajendra Nagar',
+            police_station='Attapur',
+            idol_height=18.0
+        )
+
+        # Legacy/Canonical spelling idol
+        self.idol_rn_canonical = Idol.objects.create(
+            gpid='HYDRNZRJNR0001',
+            name='Rajendra Nagar Idol 1',
+            zone='Rajendra Nagar',
+            police_station='Rajendra Nagar',
+            idol_height=22.0
+        )
+
+        self.idol_chandrayangutta = Idol.objects.create(
+            gpid='HYDRNZCHNG0001',
+            name='Chandrayangutta Idol 1',
+            zone='Rajendra Nagar',
+            police_station='Chandrayangutta',
+            idol_height=16.0
+        )
+
+    # TEST 1: Rajendra Nagar user + Rajendra Nagar GPID + SAME PS -> assignment allowed
+    def test_01_same_ps_assignment_allowed(self):
+        self.client.force_authenticate(user=self.sho_attapur)
+        res = self.client.post('/api/v1/assignments/create/', {
+            'gpid': self.idol_attapur.gpid,
+            'constable_id': self.constable_attapur.id
+        })
+        self.assertEqual(res.status_code, 201)
+        self.assertTrue(Assignment.objects.filter(idol=self.idol_attapur, is_active=True).exists())
+
+    # TEST 2: Rajendra Nagar user + Rajendra Nagar GPID + SAME PS with legacy/canonical spelling difference -> assignment allowed
+    def test_02_same_ps_legacy_canonical_spelling_allowed(self):
+        self.client.force_authenticate(user=self.sho_rajendranagar_legacy)
+        res = self.client.post('/api/v1/assignments/create/', {
+            'gpid': self.idol_rn_canonical.gpid,
+            'constable_id': self.constable_rn_legacy.id
+        })
+        self.assertEqual(res.status_code, 201)
+        self.assertTrue(Assignment.objects.filter(idol=self.idol_rn_canonical, is_active=True).exists())
+
+    # TEST 3: Same zone + DIFFERENT PS for PS-scoped user -> assignment denied
+    def test_03_same_zone_different_ps_denied(self):
+        self.client.force_authenticate(user=self.sho_attapur)
+        res = self.client.post('/api/v1/assignments/create/', {
+            'gpid': self.idol_chandrayangutta.gpid,
+            'constable_id': self.constable_chandrayangutta.id
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('jurisdiction', str(res.data).lower())
+
+    # TEST 4: Different zone -> assignment denied
+    def test_04_different_zone_assignment_denied(self):
+        self.client.force_authenticate(user=self.sho_charminar)
+        res = self.client.post('/api/v1/assignments/create/', {
+            'gpid': self.idol_attapur.gpid,
+            'constable_id': self.constable_attapur.id
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('jurisdiction', str(res.data).lower())
+
+    # TEST 5: Superuser End Assignment -> SUCCESS
+    def test_05_superuser_end_assignment_success(self):
+        assign = Assignment.objects.create(
+            idol=self.idol_attapur,
+            constable=self.constable_attapur,
+            is_active=True
+        )
+        self.client.force_authenticate(user=self.superuser)
+        res = self.client.post(f'/api/v1/assignments/{assign.id}/end/', {'reason': 'Superuser end test'})
+        self.assertEqual(res.status_code, 200)
+        assign.refresh_from_db()
+        self.assertFalse(assign.is_active)
+
+    # TEST 6: Citywide Main Officer End Assignment -> SUCCESS
+    def test_06_citywide_main_officer_end_assignment_success(self):
+        assign = Assignment.objects.create(
+            idol=self.idol_attapur,
+            constable=self.constable_attapur,
+            is_active=True
+        )
+        self.client.force_authenticate(user=self.main_officer)
+        res = self.client.post(f'/api/v1/assignments/{assign.id}/end/', {'reason': 'Main Officer end test'})
+        self.assertEqual(res.status_code, 200)
+        assign.refresh_from_db()
+        self.assertFalse(assign.is_active)
+
+    # TEST 7: Authorized Rajendra Nagar user End Assignment for Rajendra Nagar assignment -> SUCCESS
+    def test_07_authorized_rajendra_nagar_user_end_assignment_success(self):
+        assign = Assignment.objects.create(
+            idol=self.idol_attapur,
+            constable=self.constable_attapur,
+            is_active=True
+        )
+        self.client.force_authenticate(user=self.sho_attapur)
+        res = self.client.post(f'/api/v1/assignments/{assign.id}/end/', {'reason': 'SHO Attapur ending'})
+        self.assertEqual(res.status_code, 200)
+        assign.refresh_from_db()
+        self.assertFalse(assign.is_active)
+
+    # TEST 8: Unauthorized zone user End Assignment -> DENIED
+    def test_08_unauthorized_zone_user_end_assignment_denied(self):
+        assign = Assignment.objects.create(
+            idol=self.idol_attapur,
+            constable=self.constable_attapur,
+            is_active=True
+        )
+        self.client.force_authenticate(user=self.sho_charminar)
+        res = self.client.post(f'/api/v1/assignments/{assign.id}/end/', {'reason': 'Unauthorized attempt'})
+        self.assertEqual(res.status_code, 403)
+        assign.refresh_from_db()
+        self.assertTrue(assign.is_active)
+
+    # TEST 9: Constable End Assignment -> DENIED
+    def test_09_constable_end_assignment_denied(self):
+        assign = Assignment.objects.create(
+            idol=self.idol_attapur,
+            constable=self.constable_attapur,
+            is_active=True
+        )
+        self.client.force_authenticate(user=self.constable_attapur)
+        res = self.client.post(f'/api/v1/assignments/{assign.id}/end/', {'reason': 'Constable attempt'})
+        self.assertEqual(res.status_code, 403)
+        assign.refresh_from_db()
+        self.assertTrue(assign.is_active)
+
+    # TEST 10: End Assignment with active tracking -> authorized admin succeeds using existing administrative termination behavior
+    def test_10_end_assignment_with_active_tracking_authorized_admin_succeeds(self):
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus
+        assign = Assignment.objects.create(
+            idol=self.idol_attapur,
+            constable=self.constable_attapur,
+            is_active=True
+        )
+        session = TrackingSession.objects.create(
+            assignment=assign,
+            status=TrackingSessionStatus.ACTIVE
+        )
+
+        # Non-admin SHO attempt gets 400
+        self.client.force_authenticate(user=self.sho_attapur)
+        res_sho = self.client.post(f'/api/v1/assignments/{assign.id}/end/', {'reason': 'SHO attempt with active tracking'})
+        self.assertEqual(res_sho.status_code, 400)
+        self.assertIn('administrative privilege required', str(res_sho.data).lower())
+
+        # Authorized Admin (Superuser or Main Officer) succeeds
+        self.client.force_authenticate(user=self.main_officer)
+        res_admin = self.client.post(f'/api/v1/assignments/{assign.id}/end/', {'reason': 'Admin force end'})
+        self.assertEqual(res_admin.status_code, 200)
+
+        assign.refresh_from_db()
+        session.refresh_from_db()
+        self.assertFalse(assign.is_active)
+        self.assertEqual(session.status, TrackingSessionStatus.ADMIN_TERMINATED)
+
+    # TEST 11: After successful End Assignment: is_active=false, officer immediately assignable, telemetry & events remain
+    def test_11_after_successful_end_assignment_state_and_history_preserved(self):
+        from apps.tracking.models import TrackingSession, TrackingSessionStatus, LocationPoint, IdolEvent
+        assign = Assignment.objects.create(
+            idol=self.idol_attapur,
+            constable=self.constable_attapur,
+            is_active=True
+        )
+        session = TrackingSession.objects.create(
+            assignment=assign,
+            status=TrackingSessionStatus.STOPPED
+        )
+        pt = LocationPoint.objects.create(
+            session=session,
+            latitude=17.385044,
+            longitude=78.486671,
+            speed=2.5,
+            accuracy=5.0,
+            recorded_at=timezone.now()
+        )
+        ev = IdolEvent.objects.create(
+            idol=self.idol_attapur,
+            gpid=self.idol_attapur.gpid,
+            event_type='ASSIGNMENT_CREATED',
+            zone='Rajendra Nagar',
+            timestamp=timezone.now()
+        )
+
+        self.client.force_authenticate(user=self.sho_attapur)
+        res = self.client.post(f'/api/v1/assignments/{assign.id}/end/', {'reason': 'Ending assignment'})
+        self.assertEqual(res.status_code, 200)
+
+        # 1. Assignment is inactive
+        assign.refresh_from_db()
+        self.assertFalse(assign.is_active)
+
+        # 2. Officer becomes immediately assignable
+        self.assertFalse(Assignment.objects.filter(constable=self.constable_attapur, is_active=True).exists())
+
+        # 3. Telemetry and location points remain
+        self.assertTrue(LocationPoint.objects.filter(id=pt.id).exists())
+        self.assertTrue(TrackingSession.objects.filter(id=session.id).exists())
+
+        # 4. Events remain
+        self.assertTrue(IdolEvent.objects.filter(id=ev.id).exists())
+
+    # TEST 12: No duplicate assignment can be created
+    def test_12_no_duplicate_assignment_can_be_created(self):
+        Assignment.objects.create(
+            idol=self.idol_attapur,
+            constable=self.constable_attapur,
+            is_active=True
+        )
+
+        # Creating another assignment for the same GPID fails
+        pc_other = User.objects.create_user(
+            username='pc_attapur_other',
+            password='password123',
+            role=UserRole.CONSTABLE,
+            zone='Rajendra Nagar',
+            police_station='Attapur',
+            police_id='PC-ATPR-99'
+        )
+        self.client.force_authenticate(user=self.sho_attapur)
+        res_dup_gpid = self.client.post('/api/v1/assignments/create/', {
+            'gpid': self.idol_attapur.gpid,
+            'constable_id': pc_other.id
+        })
+        self.assertEqual(res_dup_gpid.status_code, 400)
+        self.assertIn('already has an active officer assignment', str(res_dup_gpid.data))
+
+        # Creating another assignment for the same constable on a different GPID fails
+        idol_other = Idol.objects.create(
+            gpid='HYDRNZATPR9999',
+            name='Attapur Idol Other',
+            zone='Rajendra Nagar',
+            police_station='Attapur',
+            idol_height=18.0
+        )
+        res_dup_officer = self.client.post('/api/v1/assignments/create/', {
+            'gpid': idol_other.gpid,
+            'constable_id': self.constable_attapur.id
+        })
+        self.assertEqual(res_dup_officer.status_code, 400)
+        self.assertIn('already has an active gpid assignment', str(res_dup_officer.data).lower())
+
+
+
 

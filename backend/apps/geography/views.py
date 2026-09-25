@@ -35,7 +35,8 @@ class PoliceStationListView(APIView):
                     qs = qs.none()
             elif user.role == 'SHO':
                 if user.police_station:
-                    qs = qs.filter(ps_name__iexact=user.police_station)
+                    from common.zones import ps_filter_q
+                    qs = qs.filter(ps_filter_q('ps_name', user.police_station))
                 else:
                     qs = qs.none()
             elif user.role == 'MAIN_OFFICER' and user_zone:
@@ -93,7 +94,8 @@ class ZoneListView(APIView):
                 canonical = normalize_zone(user_zone)
                 zones = [canonical] if canonical else []
             elif user.role == 'SHO':
-                ps = PoliceStationBoundary.objects.filter(ps_name__iexact=user.police_station).first()
+                from common.zones import ps_filter_q
+                ps = PoliceStationBoundary.objects.filter(ps_filter_q('ps_name', user.police_station)).first()
                 raw_zone = ps.zone if ps and ps.zone else user_zone
                 canonical = normalize_zone(raw_zone)
                 zones = [canonical] if canonical else []
