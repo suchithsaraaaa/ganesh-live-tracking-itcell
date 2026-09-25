@@ -42,6 +42,56 @@ def get_height_badge(height):
     return f"{h:.1f} ft (<15 FT Subthreshold)"
 
 
+def get_report_eligible_q():
+    """
+    Authoritative Django Q expression defining report-eligible idols.
+    A GPID is report eligible when its procession has reached a terminal operational state:
+    - IMMERSION_COMPLETED (Immersion Completed / Immersed)
+    - HOLDING (Holding / Sent to Holding)
+    Or has authoritative terminal operational events logged:
+    - IMMERSION_COMPLETED
+    - SENT_TO_HOLDING
+    - HOLDING_POINT_ENTERED
+    - VISARJAN_NOT_DONE
+    """
+    from django.db.models import Q
+    from apps.idols.models import ProcessionState
+    from apps.tracking.models import IdolEventType
+    return (
+        Q(procession_state__in=[ProcessionState.IMMERSION_COMPLETED, ProcessionState.HOLDING]) |
+        Q(operational_events__event_type__in=[
+            IdolEventType.IMMERSION_COMPLETED,
+            IdolEventType.SENT_TO_HOLDING,
+            IdolEventType.HOLDING_POINT_ENTERED,
+            IdolEventType.VISARJAN_NOT_DONE
+        ])
+    )
+
+
+def is_report_eligible(idol):
+    """
+    Authoritative evaluation for a single Idol instance.
+    Returns True if the idol's procession has reached a terminal operational state
+    (completed or holding) or has qualifying terminal operational events.
+    """
+    if idol is None:
+        return False
+    from apps.idols.models import ProcessionState
+    from apps.tracking.models import IdolEventType
+    if idol.procession_state in [ProcessionState.IMMERSION_COMPLETED, ProcessionState.HOLDING]:
+        return True
+    if hasattr(idol, 'operational_events'):
+        return idol.operational_events.filter(
+            event_type__in=[
+                IdolEventType.IMMERSION_COMPLETED,
+                IdolEventType.SENT_TO_HOLDING,
+                IdolEventType.HOLDING_POINT_ENTERED,
+                IdolEventType.VISARJAN_NOT_DONE
+            ]
+        ).exists()
+    return False
+
+
 def generate_idol_pdf_report(gpid, session_id=None, generated_by_user=None):
     """
     Generates a formal police operational report for a specific GPID and TrackingSession.

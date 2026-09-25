@@ -17,7 +17,7 @@ import {
 } from '../api/client';
 import { LoadingState, EmptyState, ErrorState } from '../components/shared/States';
 
-type HeightBucketFilter = 'all_15_plus' | '15_20' | '21_25' | '26_plus';
+type HeightBucketFilter = 'all' | 'all_15_plus' | '15_20' | '21_25' | '26_plus' | 'below_15';
 type VisarjanDateFilter = 'all' | 'today' | 'tomorrow' | 'custom';
 type OperationalStatusFilter = 'all' | 'completed' | 'holding';
 
@@ -25,7 +25,7 @@ export const ReportsPage: React.FC = () => {
   // Filter States
   const [selectedZone, setSelectedZone] = useState<string>('All Zones');
   const [selectedStation, setSelectedStation] = useState<string>('All Police Stations');
-  const [selectedHeight, setSelectedHeight] = useState<HeightBucketFilter>('all_15_plus');
+  const [selectedHeight, setSelectedHeight] = useState<HeightBucketFilter>('all');
   const [visarjanDateMode, setVisarjanDateMode] = useState<VisarjanDateFilter>('all');
   const [customVisarjanDate, setCustomVisarjanDate] = useState<string>('');
   const [operationalStatus, setOperationalStatus] = useState<OperationalStatusFilter>('all');
@@ -107,7 +107,7 @@ export const ReportsPage: React.FC = () => {
         search: debouncedSearch.trim() || undefined,
         zone: selectedZone !== 'All Zones' ? selectedZone : undefined,
         police_station: selectedStation !== 'All Police Stations' ? selectedStation : undefined,
-        height_bucket: selectedHeight !== 'all_15_plus' ? selectedHeight : undefined,
+        height_bucket: selectedHeight !== 'all' ? selectedHeight : undefined,
         operational_status: operationalStatus !== 'all' ? operationalStatus : undefined,
         visarjan_date: computedVisarjanDate,
       });
@@ -141,7 +141,7 @@ export const ReportsPage: React.FC = () => {
     return (
       selectedZone !== 'All Zones' ||
       selectedStation !== 'All Police Stations' ||
-      selectedHeight !== 'all_15_plus' ||
+      selectedHeight !== 'all' ||
       operationalStatus !== 'all' ||
       visarjanDateMode !== 'all' ||
       Boolean(searchQuery.trim())
@@ -151,7 +151,7 @@ export const ReportsPage: React.FC = () => {
   const handleResetFilters = () => {
     setSelectedZone('All Zones');
     setSelectedStation('All Police Stations');
-    setSelectedHeight('all_15_plus');
+    setSelectedHeight('all');
     setOperationalStatus('all');
     setVisarjanDateMode('all');
     setCustomVisarjanDate('');
@@ -253,8 +253,11 @@ export const ReportsPage: React.FC = () => {
               }}
               className="w-full px-2.5 py-1.5 bg-elevated border border-border-default rounded text-xs text-text-primary focus:outline-none focus:border-accent font-medium"
             >
+              <option value="all">
+                All Heights ({summary ? summary.total_eligible : '…'})
+              </option>
               <option value="all_15_plus">
-                All 15+ FT ({summary ? summary.total_eligible : '…'})
+                All 15+ FT ({summary ? ((summary.count_15_20 || 0) + (summary.count_21_25 || 0) + (summary.count_26_plus || 0)) : '…'})
               </option>
               <option value="15_20">
                 15–20 FT ({summary ? summary.count_15_20 : '…'})
@@ -264,6 +267,9 @@ export const ReportsPage: React.FC = () => {
               </option>
               <option value="26_plus">
                 26 FT+ ({summary ? summary.count_26_plus : '…'})
+              </option>
+              <option value="below_15">
+                Under 15 FT ({summary && summary.count_below_15 !== undefined ? summary.count_below_15 : '…'})
               </option>
             </select>
           </div>
@@ -364,7 +370,9 @@ export const ReportsPage: React.FC = () => {
             <div className="text-xl font-bold text-text-primary mt-0.5 mono">
               {summary ? summary.total_eligible : '—'}
             </div>
-            <div className="text-[10px] text-accent font-medium mt-0.5">Finished or Staged</div>
+            <div className="text-[10px] text-accent font-medium mt-0.5">
+              {summary && summary.count_below_15 ? `Finished/Staged (incl. ${summary.count_below_15} <15 FT)` : 'Finished or Staged'}
+            </div>
           </div>
 
           {/* Immersion Completed */}

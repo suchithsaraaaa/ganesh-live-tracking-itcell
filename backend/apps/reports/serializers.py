@@ -36,9 +36,10 @@ class CompletedReportRegistrySerializer(serializers.ModelSerializer):
 
     def get_final_state(self, obj):
         # 1. Check Idol procession_state first
-        if obj.procession_state == ProcessionState.IMMERSION_COMPLETED:
+        state_str = str(obj.procession_state or '').upper()
+        if state_str in [ProcessionState.IMMERSION_COMPLETED, 'IMMERSED', 'VISARJAN_DONE']:
             return 'IMMERSION_COMPLETED'
-        if obj.procession_state == ProcessionState.HOLDING:
+        if state_str in [ProcessionState.HOLDING, 'SENT_TO_HOLDING']:
             return 'SENT_TO_HOLDING'
 
         # 2. Check prefetched events
@@ -95,4 +96,7 @@ class CompletedReportRegistrySerializer(serializers.ModelSerializer):
         event = events_map.get(obj.id)
         if event and event.timestamp:
             return event.timestamp.isoformat()
+        if getattr(obj, 'updated_at', None):
+            return obj.updated_at.isoformat()
         return None
+

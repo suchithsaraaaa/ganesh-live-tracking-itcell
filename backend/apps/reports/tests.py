@@ -171,7 +171,7 @@ class CompletedReportsRegistryTests(TestCase):
             procession_state=ProcessionState.IMMERSION_COMPLETED
         )
 
-    def test_registry_filters_only_completed_and_holding_15_plus(self):
+    def test_registry_filters_only_completed_and_holding_all_heights(self):
         res = self.client.get('/api/v1/reports/registry/')
         self.assertEqual(res.status_code, 200)
         data = res.json()
@@ -179,18 +179,25 @@ class CompletedReportsRegistryTests(TestCase):
         self.assertIn('HYDCMRZCMNR9001', gpids)
         self.assertIn('HYDCMRZCHGT9002', gpids)
         self.assertIn('HYDNRZBEGM9003', gpids)
-        self.assertNotIn('HYDCMRZCMNR9004', gpids)  # tracking active
-        self.assertNotIn('HYDCMRZCMNR9005', gpids)  # < 15 ft
-        self.assertEqual(data['summary']['total_eligible'], 3)
-        self.assertEqual(data['summary']['count_completed'], 1)
+        self.assertIn('HYDCMRZCMNR9005', gpids)  # < 15 ft now included in base registry!
+        self.assertNotIn('HYDCMRZCMNR9004', gpids)  # tracking active NOT included
+        self.assertEqual(data['summary']['total_eligible'], 4)
+        self.assertEqual(data['summary']['count_completed'], 2)
         self.assertEqual(data['summary']['count_holding'], 2)
+        self.assertEqual(data['summary']['count_below_15'], 1)
+
+        # But when height_bucket='all_15_plus' is explicitly applied:
+        res_15 = self.client.get('/api/v1/reports/registry/?height_bucket=all_15_plus')
+        self.assertEqual(res_15.status_code, 200)
+        gpids_15 = [r['gpid'] for r in res_15.json()['results']]
+        self.assertNotIn('HYDCMRZCMNR9005', gpids_15)
 
     def test_zone_and_police_station_filters(self):
         # Filter Zone=Charminar
         res1 = self.client.get('/api/v1/reports/registry/?zone=Charminar')
         self.assertEqual(res1.status_code, 200)
         gpids1 = [r['gpid'] for r in res1.json()['results']]
-        self.assertEqual(set(gpids1), {'HYDCMRZCMNR9001', 'HYDCMRZCHGT9002'})
+        self.assertEqual(set(gpids1), {'HYDCMRZCMNR9001', 'HYDCMRZCHGT9002', 'HYDCMRZCMNR9005'})
 
         # Filter Zone=Charminar AND PS=Chaderghat
         res2 = self.client.get('/api/v1/reports/registry/?zone=Charminar&police_station=Chaderghat')
@@ -214,6 +221,11 @@ class CompletedReportsRegistryTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual([r['gpid'] for r in res.json()['results']], ['HYDNRZBEGM9003'])
 
+        # Below 15 FT
+        res_below = self.client.get('/api/v1/reports/registry/?height_bucket=below_15')
+        self.assertEqual(res_below.status_code, 200)
+        self.assertEqual([r['gpid'] for r in res_below.json()['results']], ['HYDCMRZCMNR9005'])
+
     def test_visarjan_date_filter(self):
         res = self.client.get('/api/v1/reports/registry/?visarjan_date=2026-09-24')
         self.assertEqual(res.status_code, 200)
@@ -223,4 +235,245 @@ class CompletedReportsRegistryTests(TestCase):
         res = self.client.get('/api/v1/reports/registry/?search=Balapur')
         self.assertEqual(res.status_code, 200)
         self.assertEqual([r['gpid'] for r in res.json()['results']], ['HYDCMRZCMNR9001'])
+
+
+class ReportRegistryBusinessRuleTests(TestCase):
+    """
+    Exhaustive verification of all 12 operational business rules required for Reports Registry.
+    """
+    def setUp(self):
+        from datetime import date
+        from apps.idols.models import ProcessionState
+        from apps.tracking.models import IdolEvent, IdolEventType
+
+        self.client = APIClient()
+        self.superadmin = User.objects.create_user(
+            username='superadmin_rep',
+            password='password123',
+            role=UserRole.SUPER_ADMIN
+        )
+        self.sho_charminar = User.objects.create_user(
+            username='sho_charminar_rep',
+            password='password123',
+            role=UserRole.SHO,
+            zone='Charminar',
+            police_station='Charminar'
+        )
+        self.client.force_authenticate(user=self.superadmin)
+
+    def test_01_immersion_completed_appears_regardless_of_height(self):
+        # 1. A procession in IMMERSION_COMPLETED appears in Reports Registry (tests both 18ft and 12ft)
+        from apps.idols.models import ProcessionState
+        i_tall = Idol.objects.create(
+            gpid='TEST-IMM-TALL', name='Tall Immersed', zone='Charminar',
+            police_station='Charminar', idol_height=18.0,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        i_sub = Idol.objects.create(
+            gpid='TEST-IMM-SUB', name='Subthreshold Immersed', zone='Charminar',
+            police_station='Charminar', idol_height=12.0,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        res = self.client.get('/api/v1/reports/registry/')
+        gpids = [r['gpid'] for r in res.json()['results']]
+        self.assertIn('TEST-IMM-TALL', gpids)
+        self.assertIn('TEST-IMM-SUB', gpids)
+
+    def test_02_holding_sent_to_holding_appears(self):
+        # 2. A procession in HOLDING/SENT_TO_HOLDING appears in Reports Registry.
+        from apps.idols.models import ProcessionState
+        from apps.tracking.models import IdolEvent, IdolEventType
+        from django.utils import timezone
+        i_holding = Idol.objects.create(
+            gpid='TEST-HOLDING-STATE', name='Holding State', zone='Charminar',
+            police_station='Charminar', idol_height=16.0,
+            procession_state=ProcessionState.HOLDING
+        )
+        i_event = Idol.objects.create(
+            gpid='TEST-HOLDING-EVENT', name='Holding Event', zone='Charminar',
+            police_station='Charminar', idol_height=14.0,
+            procession_state=ProcessionState.MOVING
+        )
+        IdolEvent.objects.create(
+            idol=i_event, gpid=i_event.gpid, event_type=IdolEventType.SENT_TO_HOLDING,
+            timestamp=timezone.now(), actor=self.superadmin
+        )
+        res = self.client.get('/api/v1/reports/registry/')
+        gpids = [r['gpid'] for r in res.json()['results']]
+        self.assertIn('TEST-HOLDING-STATE', gpids)
+        self.assertIn('TEST-HOLDING-EVENT', gpids)
+
+    def test_03_not_started_does_not_appear(self):
+        # 3. NOT_STARTED does not appear.
+        from apps.idols.models import ProcessionState
+        Idol.objects.create(
+            gpid='TEST-NOT-STARTED', name='Not Started Idol', zone='Charminar',
+            police_station='Charminar', idol_height=20.0,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+        res = self.client.get('/api/v1/reports/registry/')
+        gpids = [r['gpid'] for r in res.json()['results']]
+        self.assertNotIn('TEST-NOT-STARTED', gpids)
+
+    def test_04_tracking_does_not_appear(self):
+        # 4. TRACKING does not appear.
+        from apps.idols.models import ProcessionState
+        Idol.objects.create(
+            gpid='TEST-TRACKING-ACTIVE', name='Tracking Active Idol', zone='Charminar',
+            police_station='Charminar', idol_height=19.0,
+            procession_state=ProcessionState.TRACKING
+        )
+        res = self.client.get('/api/v1/reports/registry/')
+        gpids = [r['gpid'] for r in res.json()['results']]
+        self.assertNotIn('TEST-TRACKING-ACTIVE', gpids)
+
+    def test_05_completed_appears_even_if_pdf_never_downloaded(self):
+        # 5. A completed procession appears even if its PDF has never been downloaded.
+        from apps.idols.models import ProcessionState
+        Idol.objects.create(
+            gpid='TEST-NO-PDF-YET', name='Never Downloaded PDF', zone='Charminar',
+            police_station='Charminar', idol_height=15.0,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        res = self.client.get('/api/v1/reports/registry/')
+        gpids = [r['gpid'] for r in res.json()['results']]
+        self.assertIn('TEST-NO-PDF-YET', gpids)
+
+    def test_06_pdf_generation_still_works(self):
+        # 6. PDF generation still works.
+        from apps.idols.models import ProcessionState
+        i = Idol.objects.create(
+            gpid='TEST-PDF-GEN', name='PDF Test Idol', zone='Charminar',
+            police_station='Charminar', idol_height=14.0,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        res = self.client.get(f'/api/v1/reports/idols/{i.gpid}/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res['Content-Type'], 'application/pdf')
+        self.assertTrue(res.content.startswith(b'%PDF-'))
+
+    def test_07_no_duplicate_entries_for_same_gpid(self):
+        # 7. The same GPID cannot create duplicate report registry entries even with multiple events.
+        from apps.idols.models import ProcessionState
+        from apps.tracking.models import IdolEvent, IdolEventType
+        from django.utils import timezone
+        i = Idol.objects.create(
+            gpid='TEST-MULTI-EVENT', name='Multi Event Idol', zone='Charminar',
+            police_station='Charminar', idol_height=16.0,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        for _ in range(5):
+            IdolEvent.objects.create(
+                idol=i, gpid=i.gpid, event_type=IdolEventType.IMMERSION_COMPLETED,
+                timestamp=timezone.now(), actor=self.superadmin
+            )
+        res = self.client.get('/api/v1/reports/registry/')
+        data = res.json()
+        matching = [r for r in data['results'] if r['gpid'] == 'TEST-MULTI-EVENT']
+        self.assertEqual(len(matching), 1)
+
+    def test_08_todays_immersion_date_2026_09_25_handled_correctly(self):
+        # 8. Today's immersion date 2026-09-25 is handled correctly.
+        from datetime import date
+        from apps.idols.models import ProcessionState
+        from django.utils import timezone
+        today = timezone.localdate()
+        Idol.objects.create(
+            gpid='TEST-TODAY-DATE', name='Today Immersion', zone='Charminar',
+            police_station='Charminar', idol_height=15.0,
+            immersion_date=today,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        res = self.client.get('/api/v1/reports/registry/?visarjan_date=today')
+        gpids = [r['gpid'] for r in res.json()['results']]
+        self.assertIn('TEST-TODAY-DATE', gpids)
+
+    def test_09_jurisdiction_filtering_remains_enforced(self):
+        # 9. Jurisdiction filtering remains enforced (SHO Charminar cannot see Golconda reports).
+        from apps.idols.models import ProcessionState
+        Idol.objects.create(
+            gpid='TEST-GOLCONDA-REP', name='Golconda Idol', zone='Golconda',
+            police_station='Kulsumpura', idol_height=17.0,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        Idol.objects.create(
+            gpid='TEST-CHARMINAR-REP', name='Charminar Idol', zone='Charminar',
+            police_station='Charminar', idol_height=17.0,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        self.client.force_authenticate(user=self.sho_charminar)
+        res = self.client.get('/api/v1/reports/registry/')
+        gpids = [r['gpid'] for r in res.json()['results']]
+        self.assertIn('TEST-CHARMINAR-REP', gpids)
+        self.assertNotIn('TEST-GOLCONDA-REP', gpids)
+
+    def test_10_existing_report_records_continue_to_work(self):
+        # 10. Existing report records continue to work.
+        from apps.idols.models import ProcessionState
+        from apps.tracking.models import IdolEvent, IdolEventType
+        from django.utils import timezone
+        i = Idol.objects.create(
+            gpid='TEST-EXISTING-REP', name='Existing Report Idol', zone='Charminar',
+            police_station='Charminar', idol_height=19.0,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        IdolEvent.objects.create(
+            idol=i, gpid=i.gpid, event_type=IdolEventType.REPORT_GENERATED,
+            timestamp=timezone.now(), actor=self.superadmin,
+            metadata={'report_id': 'HYD-REP-EXISTING1'}
+        )
+        res = self.client.get('/api/v1/reports/registry/')
+        gpids = [r['gpid'] for r in res.json()['results']]
+        self.assertIn('TEST-EXISTING-REP', gpids)
+
+    def test_11_existing_historical_completed_reports_remain_visible(self):
+        # 11. Existing historical completed reports remain visible.
+        from datetime import date
+        from apps.idols.models import ProcessionState
+        Idol.objects.create(
+            gpid='TEST-HISTORICAL-REP', name='Historical Idol', zone='Charminar',
+            police_station='Charminar', idol_height=22.0,
+            immersion_date=date(2026, 9, 20),
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        res = self.client.get('/api/v1/reports/registry/')
+        gpids = [r['gpid'] for r in res.json()['results']]
+        self.assertIn('TEST-HISTORICAL-REP', gpids)
+
+    def test_12_exact_gpid_hydgolzkulp2464_appears_after_fix(self):
+        # 12. The exact GPID HYDGOLZKULP2464 appears after the fix.
+        from datetime import date
+        from apps.idols.models import ProcessionState
+        from apps.tracking.models import IdolEvent, IdolEventType
+        from django.utils import timezone
+        idol_2464 = Idol.objects.create(
+            gpid='HYDGOLZKULP2464',
+            name='VULPEE ABHINAV',
+            association_name='HAPPY CLUB FRIENDS ASSOCIATION',
+            zone='Golconda',
+            division='Kulsumpura',
+            police_station='Kulsumpura',
+            idol_height=14.0,  # 14.00 FT (Subthreshold <15 FT)
+            immersion_date=date(2026, 9, 25),
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        IdolEvent.objects.create(
+            idol=idol_2464,
+            gpid=idol_2464.gpid,
+            event_type=IdolEventType.IMMERSION_COMPLETED,
+            timestamp=timezone.now(),
+            zone='Golconda'
+        )
+        res = self.client.get('/api/v1/reports/registry/')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        gpids = [r['gpid'] for r in data['results']]
+        self.assertIn('HYDGOLZKULP2464', gpids)
+        item = next(r for r in data['results'] if r['gpid'] == 'HYDGOLZKULP2464')
+        self.assertEqual(item['final_state'], 'IMMERSION_COMPLETED')
+        self.assertEqual(item['final_state_display'], 'Immersion Completed')
+        self.assertEqual(float(item['idol_height']), 14.0)
+        self.assertEqual(item['police_station'], 'Kulsumpura')
+        self.assertEqual(item['zone'], 'Golconda')
+
 

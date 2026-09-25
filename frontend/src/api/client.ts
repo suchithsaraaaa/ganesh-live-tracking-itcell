@@ -215,7 +215,7 @@ export async function fetchCompletedReportsRegistry(params?: {
   if (params?.visarjan_date && params.visarjan_date !== 'all' && params.visarjan_date !== 'All Dates') {
     query.append('visarjan_date', params.visarjan_date);
   }
-  if (params?.height_bucket && params.height_bucket !== 'all' && params.height_bucket !== 'All 15+ FT') {
+  if (params?.height_bucket && !['all', 'all_heights', 'All Heights', ''].includes(params.height_bucket)) {
     query.append('height_bucket', params.height_bucket);
   }
   if (params?.operational_status && params.operational_status !== 'all') {

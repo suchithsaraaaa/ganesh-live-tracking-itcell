@@ -429,6 +429,8 @@ export interface CompletedReportsSummary {
   count_15_20: number;
   count_21_25: number;
   count_26_plus: number;
+  count_below_15?: number;
+  count_15_plus?: number;
 }
 
 export interface CompletedReportsResponse {

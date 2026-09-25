@@ -121,6 +121,12 @@ class Idol(models.Model):
             models.Index(fields=['procession_state', 'status']),
         ]
 
+    @property
+    def is_report_eligible(self):
+        """Authoritative evaluation for report eligibility."""
+        from apps.reports.services import is_report_eligible
+        return is_report_eligible(self)
+
     def __str__(self):
         return f"{self.gpid} - {self.name or self.association_name or 'Idol'}"
 
