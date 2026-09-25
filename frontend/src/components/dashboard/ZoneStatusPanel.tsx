@@ -5,9 +5,10 @@ interface ZoneStatusPanelProps {
   markers: ActiveMarker[];
   selectedZone: string;
   onSelectZone: (zone: string) => void;
+  zoneStats?: ZoneRow[];
 }
 
-interface ZoneRow {
+export interface ZoneRow {
   zone: string;
   total: number;
   active: number;
@@ -15,8 +16,11 @@ interface ZoneRow {
   immersed: number;
 }
 
-export const ZoneStatusPanel: React.FC<ZoneStatusPanelProps> = ({ markers, selectedZone, onSelectZone }) => {
+export const ZoneStatusPanel: React.FC<ZoneStatusPanelProps> = ({ markers, selectedZone, onSelectZone, zoneStats }) => {
   const rows: ZoneRow[] = useMemo(() => {
+    if (zoneStats && zoneStats.length > 0) {
+      return [...zoneStats].sort((a, b) => b.total - a.total);
+    }
     const byZone = new Map<string, ZoneRow>();
     markers.forEach((m) => {
       const zone = m.zone || 'Unassigned';
@@ -28,7 +32,7 @@ export const ZoneStatusPanel: React.FC<ZoneStatusPanelProps> = ({ markers, selec
       byZone.set(zone, row);
     });
     return Array.from(byZone.values()).sort((a, b) => b.total - a.total);
-  }, [markers]);
+  }, [markers, zoneStats]);
 
   return (
     <div className="bg-elevated border border-border-subtle rounded-lg px-4 py-3 flex flex-col">

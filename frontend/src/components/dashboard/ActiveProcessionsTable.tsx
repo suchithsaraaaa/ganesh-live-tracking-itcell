@@ -41,11 +41,14 @@ export const ActiveProcessionsTable: React.FC<ActiveProcessionsTableProps> = ({
   selectedGpid,
   onSelectMarker,
 }) => {
-  // Guarantee ONE GPID = ONE ROW (Rule 9 & 10)
+  // Guarantee ONE GPID = ONE ROW and ONLY actual active processions (Rule 9 & 10)
   const uniqueRows = useMemo(() => {
     const seen = new Set<string>();
     const list: ActiveMarker[] = [];
     for (const m of markers) {
+      // Must be an active tracking session or active procession state (not un-started origin marker)
+      const isActualActive = !m.is_origin_marker || (m.procession_state && m.procession_state !== 'NOT_STARTED');
+      if (!isActualActive) continue;
       if (!seen.has(m.gpid)) {
         seen.add(m.gpid);
         list.push(m);
@@ -70,11 +73,14 @@ export const ActiveProcessionsTable: React.FC<ActiveProcessionsTableProps> = ({
         <div className="bg-elevated border border-border-subtle rounded-lg overflow-hidden min-w-[920px]">
           {uniqueRows.map((m, i) => {
             const isSelected = selectedGpid === m.gpid;
+            const isSubthreshold = m.height_classification === 'SUBTHRESHOLD' || (m.idol_height && m.idol_height < 15);
             const heightBadgeColor =
               m.height_classification === 'RED' || (m.idol_height && m.idol_height >= 26)
                 ? '#EF4444'
                 : m.height_classification === 'YELLOW' || (m.idol_height && m.idol_height >= 21)
                 ? '#F59E0B'
+                : isSubthreshold
+                ? '#06B6D4'
                 : '#10B981';
 
             return (
@@ -95,7 +101,7 @@ export const ActiveProcessionsTable: React.FC<ActiveProcessionsTableProps> = ({
                       backgroundColor: `${heightBadgeColor}15`,
                     }}
                   >
-                    {m.idol_height ? `${m.idol_height} ft` : '>=15 ft'}
+                    {m.idol_height ? `${m.idol_height} ft` : '<15 ft'}
                   </span>
                 </span>
                 <span className="w-24 text-text-secondary truncate">{m.zone}</span>

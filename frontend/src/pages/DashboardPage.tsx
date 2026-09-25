@@ -40,11 +40,12 @@ export const DashboardPage: React.FC = () => {
           <div className="flex items-center space-x-2">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary flex items-center gap-1.5">
               <Filter className="w-3 h-3 text-accent" />
-              Height Filter (&ge;15ft):
+              Height Filter:
             </span>
             <div className="flex items-center space-x-1">
               {[
-                { id: 'ALL', label: 'All 15+ ft' },
+                { id: 'ALL', label: 'All Heights' },
+                { id: 'below_15', label: 'Below 15 ft', dot: '#06B6D4' },
                 { id: '15_20', label: '15–20 ft (Green)', dot: '#10B981' },
                 { id: '21_25', label: '21–25 ft (Yellow)', dot: '#F59E0B' },
                 { id: 'above_25', label: '26+ ft (Red)', dot: '#EF4444' },
@@ -91,7 +92,6 @@ export const DashboardPage: React.FC = () => {
         <div className="flex-1 flex flex-col xl:flex-row gap-4 min-h-[520px] lg:min-h-[600px]">
           <div className="flex-1 min-h-[500px] lg:min-h-[580px] rounded-lg overflow-hidden border border-border-subtle relative">
             <LiveMap
-
               markers={filteredMarkers}
               selectedMarker={selectedMarker}
               onSelectMarker={handleSelectMarker}
@@ -107,6 +107,7 @@ export const DashboardPage: React.FC = () => {
               markers={filteredMarkers}
               selectedZone={selectedZone}
               onSelectZone={setSelectedZone}
+              zoneStats={kpis?.zone_stats}
             />
             <RecentAlertsPanel markers={filteredMarkers} onSelectAlert={handleSelectMarker} />
           </div>

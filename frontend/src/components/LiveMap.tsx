@@ -15,6 +15,7 @@ interface LiveMapProps {
 
 // Height Classification Palette (Strict Rule: Marker color = Height ONLY)
 const HEIGHT_COLORS = {
+  CYAN: '#06B6D4',   // Below 15 ft
   GREEN: '#10B981',  // 15–20 ft
   YELLOW: '#F59E0B', // 21–25 ft
   RED: '#EF4444',    // 26+ ft
@@ -26,6 +27,9 @@ export function getMarkerHeightColor(marker: ActiveMarker): string {
   }
   if (marker.height_classification === 'YELLOW' || (marker.idol_height !== null && marker.idol_height !== undefined && marker.idol_height >= 21)) {
     return HEIGHT_COLORS.YELLOW;
+  }
+  if (marker.height_classification === 'SUBTHRESHOLD' || (marker.idol_height !== null && marker.idol_height !== undefined && marker.idol_height < 15)) {
+    return HEIGHT_COLORS.CYAN;
   }
   return HEIGHT_COLORS.GREEN;
 }
@@ -111,11 +115,13 @@ function createMarkerIcon(marker: ActiveMarker, isSelected: boolean = false): L.
 
 function buildMarkerPopupHtml(m: ActiveMarker): string {
   const heightColor = getMarkerHeightColor(m);
-  const heightText = m.idol_height ? `${m.idol_height} ft` : '>=15 ft';
+  const heightText = m.idol_height ? `${m.idol_height} ft` : '<15 ft';
   const heightCategory = m.height_classification === 'RED'
     ? '26+ FT'
     : m.height_classification === 'YELLOW'
     ? '21–25 FT'
+    : m.height_classification === 'SUBTHRESHOLD' || (m.idol_height !== null && m.idol_height !== undefined && m.idol_height < 15)
+    ? '<15 FT'
     : '15–20 FT';
 
   const conf = m.geocoding_confidence || 'HIGH';

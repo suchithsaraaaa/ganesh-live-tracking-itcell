@@ -183,35 +183,45 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } else {
       const heightVal = idol.idol_height ? Number(idol.idol_height) : null;
       const heightCat =
-        heightVal && heightVal >= 26 ? 'RED' : heightVal && heightVal >= 21 ? 'YELLOW' : 'GREEN';
+        heightVal && heightVal >= 26
+          ? 'RED'
+          : heightVal && heightVal >= 21
+          ? 'YELLOW'
+          : heightVal && heightVal >= 15
+          ? 'GREEN'
+          : 'SUBTHRESHOLD';
 
-      const syntheticMarker: ActiveMarker = {
-        id: idol.id,
-        gpid: idol.gpid,
-        idol_name: idol.name || idol.association_name || 'Idol',
-        association_name: idol.association_name,
-        zone: idol.zone,
-        division: idol.division,
-        police_station: idol.police_station,
-        ps_code: idol.ps_code,
-        procession_state: idol.procession_state,
-        connection_state: 'OFFLINE',
-        is_origin_marker: true,
-        latitude: idol.latitude ? Number(idol.latitude) : 17.3850,
-        longitude: idol.longitude ? Number(idol.longitude) : 78.4867,
-        speed: null,
-        heading: null,
-        accuracy: null,
-        last_gps_timestamp: idol.updated_at,
-        idol_height: heightVal,
-        height_classification: heightCat,
-        immersion_date: idol.immersion_date,
-        origin_location: idol.address,
-        destination: idol.river_name || idol.lake_type,
-        owner_name: idol.name,
-        assigned_constable: null,
-      };
-      setSelectedMarker(syntheticMarker);
+      if (idol.latitude && idol.longitude) {
+        const syntheticMarker: ActiveMarker = {
+          id: idol.id,
+          gpid: idol.gpid,
+          idol_name: idol.name || idol.association_name || 'Idol',
+          association_name: idol.association_name,
+          zone: idol.zone,
+          division: idol.division,
+          police_station: idol.police_station,
+          ps_code: idol.ps_code,
+          procession_state: idol.procession_state,
+          connection_state: 'OFFLINE',
+          is_origin_marker: true,
+          latitude: Number(idol.latitude),
+          longitude: Number(idol.longitude),
+          speed: null,
+          heading: null,
+          accuracy: null,
+          last_gps_timestamp: idol.updated_at,
+          idol_height: heightVal,
+          height_classification: heightCat,
+          immersion_date: idol.immersion_date,
+          origin_location: idol.address,
+          destination: idol.river_name || idol.lake_type,
+          owner_name: idol.name,
+          assigned_constable: null,
+        };
+        setSelectedMarker(syntheticMarker);
+      } else {
+        setSelectedMarker(null);
+      }
     }
     setIsDrawerOpen(true);
   }, [activeMarkers]);
@@ -272,6 +282,7 @@ export const TrackingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (selectedStateFilter === 'IMMERSION_COMPLETED' && m.procession_state !== 'IMMERSION_COMPLETED') return false;
     }
     if (selectedHeightBucket !== 'ALL') {
+      if (selectedHeightBucket === 'below_15' && m.height_classification !== 'SUBTHRESHOLD') return false;
       if (selectedHeightBucket === '15_20' && m.height_classification !== 'GREEN') return false;
       if (selectedHeightBucket === '21_25' && m.height_classification !== 'YELLOW') return false;
       if (selectedHeightBucket === 'above_25' && m.height_classification !== 'RED') return false;

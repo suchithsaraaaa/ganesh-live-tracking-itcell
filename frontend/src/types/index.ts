@@ -134,7 +134,7 @@ export interface ActiveMarker {
   accuracy: number | null;
   last_gps_timestamp: string;
   idol_height?: number | null;
-  height_classification?: 'GREEN' | 'YELLOW' | 'RED';
+  height_classification?: 'GREEN' | 'YELLOW' | 'RED' | 'SUBTHRESHOLD';
   immersion_date?: string | null;
   origin_location?: string;
   destination?: string;
@@ -147,8 +147,16 @@ export interface ActiveMarker {
   } | null;
 }
 
+export interface ZoneWiseStat {
+  zone: string;
+  total: number;
+  active: number;
+  holding: number;
+  immersed: number;
+}
+
 export interface DashboardKPIs {
-  total_idols: number; // 15+ FT GPIDs
+  total_idols: number; // TODAY'S VISARJAN GPIDs (All Heights)
   tracking_active: number;
   moving: number;
   holding: number;
@@ -158,9 +166,11 @@ export interface DashboardKPIs {
   unassigned: number;
   offline_or_degraded: number;
   immersions_today: number;
+  h_below_15?: number;
   h_15_20?: number;
   h_21_25?: number;
   h_26_plus?: number;
+  zone_stats?: ZoneWiseStat[];
 }
 
 export interface TimestampLookupResult {

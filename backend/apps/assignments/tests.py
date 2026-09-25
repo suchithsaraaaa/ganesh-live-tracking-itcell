@@ -1080,27 +1080,30 @@ class AllAuthoritativeGPIDsAssignmentTrackingTests(TestCase):
         self.assertEqual(summary['count_15_20'], 1)     # 18ft
         self.assertEqual(summary['count_26_plus'], 1)  # 28ft
 
-    def test_02_main_dashboard_strictly_excludes_sub_15ft(self):
-        """Main Dashboard idol list and stats strictly enforce >= 15 FT."""
+    def test_02_non_dashboard_list_strictly_excludes_sub_15ft_while_dashboard_shows_today_visarjans(self):
+        """Non-dashboard idol list strictly enforces >= 15 FT, while Main Dashboard shows today's visarjans across all heights."""
         self.client.force_authenticate(user=self.super_admin)
         res_list = self.client.get('/api/v1/idols/')
         self.assertEqual(res_list.status_code, 200)
         dashboard_gpids = [item['gpid'] for item in res_list.data['results']]
 
-        # 15+ FT present
+        # 15+ FT present in non-dashboard list
         self.assertIn(self.idol_18ft.gpid, dashboard_gpids)
         self.assertIn(self.idol_28ft.gpid, dashboard_gpids)
 
-        # Sub-15 FT strictly absent from Main Dashboard
+        # Sub-15 FT strictly absent from non-dashboard list
         self.assertNotIn(self.idol_10ft.gpid, dashboard_gpids)
         self.assertNotIn(self.idol_12ft.gpid, dashboard_gpids)
         self.assertNotIn(self.idol_14ft.gpid, dashboard_gpids)
         self.assertNotIn(self.idol_sec_10ft.gpid, dashboard_gpids)
 
-        # Dashboard stats total_idols only counts 15+ FT
+        # Main Dashboard stats shows TODAY'S visarjans across ALL heights (4 today: 10ft, 14ft, 18ft, sec_10ft)
         res_stats = self.client.get('/api/v1/idols/dashboard/')
         self.assertEqual(res_stats.status_code, 200)
-        self.assertEqual(res_stats.data['kpis']['total_idols'], 2)  # only 18ft and 28ft
+        self.assertEqual(res_stats.data['kpis']['total_idols'], 4)
+        self.assertEqual(res_stats.data['kpis']['h_below_15'], 3)
+        self.assertEqual(res_stats.data['kpis']['h_15_20'], 1)
+        self.assertEqual(res_stats.data['kpis']['h_26_plus'], 0)
 
     def test_03_assignment_search_finds_sub_15ft_gpid_and_name(self):
         """Search finds sub-15 FT idols by GPID or Pandal Name."""
@@ -1264,6 +1267,96 @@ class AllAuthoritativeGPIDsAssignmentTrackingTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res['Content-Type'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         self.assertGreater(len(res.content), 1000)
+
+    def test_11_assignment_kpi_cards_reflect_visarjan_date_filter(self):
+        """KPI cards must reflect the SAME filtered population when Visarjan Date is selected."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # 1. All Dates -> reflects all 6 idols
+        res_all = self.client.get('/api/v1/assignments/registry/?visarjan_date=all')
+        self.assertEqual(res_all.status_code, 200)
+        s_all = res_all.data['summary']
+        self.assertEqual(s_all['total_eligible'], 6)
+        self.assertEqual(s_all['count_below_15'], 4)
+        self.assertEqual(s_all['count_15_20'], 1)
+        self.assertEqual(s_all['count_26_plus'], 1)
+
+        # 2. Today -> reflects only today's 4 idols (10ft, 14ft, 18ft, sec_10ft)
+        res_today = self.client.get('/api/v1/assignments/registry/?visarjan_date=today')
+        self.assertEqual(res_today.status_code, 200)
+        s_today = res_today.data['summary']
+        self.assertEqual(s_today['total_eligible'], 4)
+        self.assertEqual(s_today['count_below_15'], 3)
+        self.assertEqual(s_today['count_15_20'], 1)
+        self.assertEqual(s_today['count_26_plus'], 0)
+        self.assertEqual(res_today.data['count'], 4)
+
+        # 3. Tomorrow -> reflects only tomorrow's 2 idols (12ft, 28ft)
+        res_tom = self.client.get('/api/v1/assignments/registry/?visarjan_date=tomorrow')
+        self.assertEqual(res_tom.status_code, 200)
+        s_tom = res_tom.data['summary']
+        self.assertEqual(s_tom['total_eligible'], 2)
+        self.assertEqual(s_tom['count_below_15'], 1)
+        self.assertEqual(s_tom['count_15_20'], 0)
+        self.assertEqual(s_tom['count_26_plus'], 1)
+        self.assertEqual(res_tom.data['count'], 2)
+
+    def test_12_assignment_kpi_cards_reflect_active_filters_combination(self):
+        """KPI cards reflect the exact subset when multiple filters (zone, PS, height) are applied."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # Today + Zone=Charminar: 3 idols (10ft, 14ft, 18ft)
+        res_zone = self.client.get('/api/v1/assignments/registry/?visarjan_date=today&zone=Charminar')
+        self.assertEqual(res_zone.status_code, 200)
+        self.assertEqual(res_zone.data['summary']['total_eligible'], 3)
+        self.assertEqual(res_zone.data['count'], 3)
+
+        # Today + Zone=Charminar + Height=below_15: 2 idols (10ft, 14ft)
+        res_h = self.client.get('/api/v1/assignments/registry/?visarjan_date=today&zone=Charminar&height_bucket=below_15')
+        self.assertEqual(res_h.status_code, 200)
+        s_h = res_h.data['summary']
+        self.assertEqual(s_h['total_eligible'], 2)
+        self.assertEqual(s_h['count_below_15'], 2)
+        self.assertEqual(s_h['count_15_20'], 0)
+        self.assertEqual(res_h.data['count'], 2)
+
+    def test_13_assignment_status_kpis_filtered(self):
+        """Assigned and Unassigned KPI counts match filtered results."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # Assign 10ft idol
+        Assignment.assign_constable(idol=self.idol_10ft, constable=self.pc_cmr, assigned_by=self.super_admin)
+
+        # Today + All status: 1 assigned, 3 unassigned
+        res_today = self.client.get('/api/v1/assignments/registry/?visarjan_date=today')
+        s = res_today.data['summary']
+        self.assertEqual(s['total_eligible'], 4)
+        self.assertEqual(s['assigned'], 1)
+        self.assertEqual(s['unassigned'], 3)
+
+        # Today + Assigned status: 1 total eligible, 1 assigned, 0 unassigned
+        res_assigned = self.client.get('/api/v1/assignments/registry/?visarjan_date=today&assignment_status=assigned')
+        s_a = res_assigned.data['summary']
+        self.assertEqual(s_a['total_eligible'], 1)
+        self.assertEqual(s_a['assigned'], 1)
+        self.assertEqual(s_a['unassigned'], 0)
+
+        # Today + Unassigned status: 3 total eligible, 0 assigned, 3 unassigned
+        res_un = self.client.get('/api/v1/assignments/registry/?visarjan_date=today&assignment_status=unassigned')
+        s_u = res_un.data['summary']
+        self.assertEqual(s_u['total_eligible'], 3)
+        self.assertEqual(s_u['assigned'], 0)
+        self.assertEqual(s_u['unassigned'], 3)
+
+    def test_14_reset_filters_restores_global_kpis(self):
+        """Resetting filters (calling without query params) restores the global counts."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        res = self.client.get('/api/v1/assignments/registry/')
+        self.assertEqual(res.status_code, 200)
+        s = res.data['summary']
+        self.assertEqual(s['total_eligible'], 6)
+        self.assertEqual(res.data['count'], 6)
 
 
 

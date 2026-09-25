@@ -37,26 +37,65 @@ def get_height_classification(height):
     return 'SUBTHRESHOLD'
 
 
-def apply_idol_filters(qs, params, user=None):
+def apply_idol_filters(qs, params, user=None, is_dashboard=False):
     """
     Applies unified operational filters to an Idol queryset:
-    - Default rule: idol_height >= 15 (only bypassed for MAIN_OFFICER diagnostics)
-    - Height buckets: 15_20, 21_25, above_25
+    - Main Dashboard (is_dashboard=True):
+      * Population rule: immersion_date = timezone.localdate() (Asia/Kolkata) across ALL heights.
+      * No mandatory 15+ ft threshold.
+      * Height filter is purely optional.
+    - Non-dashboard views (is_dashboard=False):
+      * Default rule: idol_height >= 15 (only bypassed for MAIN_OFFICER diagnostics).
+    - Height buckets: below_15, 15_20, 21_25, above_25
     - Generic min_height / max_height
     - Immersions Today / exact immersion_date / immr_date alias
     - Zone, Division, Police Station, Procession State
     All conditions compose using AND logic.
     """
-    # 1. Operational 15+ ft threshold enforcement
-    include_subthreshold = params.get('include_subthreshold', '').lower() in ['true', '1', 'yes']
-    if not (include_subthreshold and user and getattr(user, 'role', None) == 'MAIN_OFFICER'):
-        qs = qs.filter(idol_height__gte=15)
+    from datetime import timedelta
+    today = timezone.localdate()
 
-    # 2. Height bucket filtering
+    if is_dashboard:
+        # 1. Main Dashboard population rule: TODAY'S Visarjan across ALL heights (Asia/Kolkata)
+        immr_date = (params.get('immersion_date') or params.get('immr_date') or '').strip().lower()
+        if immr_date in ['all', 'all_dates', 'all dates']:
+            pass
+        elif immr_date == 'tomorrow':
+            qs = qs.filter(immersion_date=today + timedelta(days=1))
+        elif immr_date and immr_date != 'today':
+            try:
+                target_date = datetime.strptime(immr_date, '%Y-%m-%d').date()
+                qs = qs.filter(immersion_date=target_date)
+            except ValueError:
+                qs = qs.filter(immersion_date=today)
+        else:
+            # Default for Main Dashboard: today's Visarjan date in Asia/Kolkata
+            qs = qs.filter(immersion_date=today)
+    else:
+        # 1. Operational 15+ ft threshold enforcement for non-dashboard views
+        include_subthreshold = params.get('include_subthreshold', '').lower() in ['true', '1', 'yes']
+        if not (include_subthreshold and user and getattr(user, 'role', None) == 'MAIN_OFFICER'):
+            qs = qs.filter(idol_height__gte=15)
+
+        # Date filtering for non-dashboard
+        immersions_today = params.get('immersions_today', '').lower() in ['true', '1', 'yes']
+        immr_date = params.get('immersion_date') or params.get('immr_date')
+        if immersions_today or immr_date == 'today':
+            qs = qs.filter(immersion_date=today)
+        elif immr_date:
+            try:
+                target_date = datetime.strptime(immr_date.strip(), '%Y-%m-%d').date()
+                qs = qs.filter(immersion_date=target_date)
+            except ValueError:
+                pass
+
+    # 2. Height bucket filtering (applicable to both dashboard and non-dashboard)
     height_bucket = params.get('height_bucket')
-    if height_bucket:
+    if height_bucket and height_bucket.upper() != 'ALL':
         hb = height_bucket.lower().strip()
-        if hb in ['15_20', '15-20', 'green']:
+        if hb in ['below_15', 'below-15', 'under_15', '<15', 'subthreshold']:
+            qs = qs.filter(Q(idol_height__lt=15) | Q(idol_height__isnull=True))
+        elif hb in ['15_20', '15-20', 'green']:
             qs = qs.filter(idol_height__gte=15, idol_height__lt=21)
         elif hb in ['21_25', '21-25', 'yellow']:
             qs = qs.filter(idol_height__gte=21, idol_height__lt=26)
@@ -78,19 +117,7 @@ def apply_idol_filters(qs, params, user=None):
         except ValueError:
             pass
 
-    # 4. Immersion date filtering (localdate in Asia/Kolkata)
-    immersions_today = params.get('immersions_today', '').lower() in ['true', '1', 'yes']
-    immr_date = params.get('immersion_date') or params.get('immr_date')
-    if immersions_today or immr_date == 'today':
-        qs = qs.filter(immersion_date=timezone.localdate())
-    elif immr_date:
-        try:
-            target_date = datetime.strptime(immr_date.strip(), '%Y-%m-%d').date()
-            qs = qs.filter(immersion_date=target_date)
-        except ValueError:
-            pass
-
-    # 5. Jurisdiction / Location filters
+    # 4. Jurisdiction / Location filters
     zone = params.get('zone')
     if zone and zone != 'All Zones':
         qs = qs.filter(zone__iexact=zone)
@@ -103,7 +130,7 @@ def apply_idol_filters(qs, params, user=None):
     if ps:
         qs = qs.filter(police_station__iexact=ps)
 
-    # 6. Procession state filter
+    # 5. Procession state filter
     procession_state = params.get('procession_state')
     if procession_state and procession_state != 'ALL':
         qs = qs.filter(procession_state=procession_state)
@@ -114,16 +141,16 @@ def apply_idol_filters(qs, params, user=None):
 class DashboardStatsView(APIView):
     """
     High-level operational overview cards and active tracking markers.
-    Enforces server-side jurisdiction and the 15+ ft operational rule.
-    Guarantees One GPID = One Map Marker.
+    Main Dashboard population: TODAY'S VISARJAN GPIDs across ALL HEIGHTS.
+    Enforces server-side jurisdiction and One GPID = One Map Marker.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         qs = filter_by_jurisdiction(Idol.objects.all(), request.user)
-        qs = apply_idol_filters(qs, request.query_params, request.user)
+        qs = apply_idol_filters(qs, request.query_params, request.user, is_dashboard=True)
 
-        # Operational KPIs (all evaluated on the operational population)
+        # Operational KPIs (all evaluated on today's complete population)
         total_idols = qs.count()
         today = timezone.localdate()
         immersions_today_count = qs.filter(immersion_date=today).count()
@@ -149,13 +176,25 @@ class DashboardStatsView(APIView):
 
         # Height distribution counts for current eligible query in a single query
         height_aggs = qs.aggregate(
+            h_below_15=Count('id', filter=Q(idol_height__lt=15) | Q(idol_height__isnull=True)),
             h_15_20=Count('id', filter=Q(idol_height__gte=15, idol_height__lt=21)),
             h_21_25=Count('id', filter=Q(idol_height__gte=21, idol_height__lt=26)),
             h_26_plus=Count('id', filter=Q(idol_height__gte=26)),
         )
+        h_below_15 = height_aggs['h_below_15'] or 0
         h_15_20 = height_aggs['h_15_20'] or 0
         h_21_25 = height_aggs['h_21_25'] or 0
         h_26_plus = height_aggs['h_26_plus'] or 0
+
+        # Authoritative Zone-wise breakdown across today's complete GPID population
+        zone_aggregates = list(
+            qs.values('zone').annotate(
+                total=Count('id'),
+                active=Count('id', filter=Q(procession_state=ProcessionState.MOVING)),
+                holding=Count('id', filter=Q(procession_state=ProcessionState.HOLDING)),
+                immersed=Count('id', filter=Q(procession_state=ProcessionState.IMMERSION_COMPLETED)),
+            ).order_by('-total')
+        )
 
         from apps.assignments.models import Assignment
         active_assignments_by_idol = {
@@ -334,10 +373,13 @@ class DashboardStatsView(APIView):
                 'unassigned': unassigned,
                 'offline_or_degraded': offline_or_degraded,
                 'immersions_today': immersions_today_count,
+                'h_below_15': h_below_15,
                 'h_15_20': h_15_20,
                 'h_21_25': h_21_25,
                 'h_26_plus': h_26_plus,
+                'zone_stats': zone_aggregates,
             },
+            'zone_stats': zone_aggregates,
             'active_markers_count': len(active_markers),
             'active_markers': active_markers
         })

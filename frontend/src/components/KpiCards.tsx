@@ -26,7 +26,7 @@ export const KpiCards: React.FC<KpiCardsProps> = ({
   onToggleImmersionsToday,
 }) => {
   const metrics: Metric[] = [
-    { id: 'ALL', label: '15+ FT GPIDs', value: kpis?.total_idols, colorVar: 'var(--color-text-primary)' },
+    { id: 'ALL', label: "TODAY'S VISARJANS", value: kpis?.total_idols, colorVar: 'var(--color-text-primary)' },
     {
       id: 'IMMERSIONS_TODAY',
       label: "Today's Immersions",

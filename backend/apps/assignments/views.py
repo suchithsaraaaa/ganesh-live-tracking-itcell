@@ -234,7 +234,7 @@ class AssignableIdolRegistryView(APIView):
         from apps.tracking.models import TrackingSession, TrackingSessionStatus
         from apps.tracking.views import get_connection_state
         from rest_framework.pagination import PageNumberPagination
-        from django.db.models import Q
+        from django.db.models import Q, Count
         from .serializers import AssignableIdolRegistrySerializer
 
         # Rule 1 & 29: Base population: ALL authoritative GPIDs in the registry
@@ -243,33 +243,46 @@ class AssignableIdolRegistryView(APIView):
         # Rule 30: Enforce server-side jurisdiction
         qs = filter_by_jurisdiction(qs, request.user)
 
-        # Rule 10: Compute authoritative summary KPIs across the user's jurisdiction
-        total_eligible = qs.count()
-        count_below_15 = qs.filter(Q(idol_height__lt=15) | Q(idol_height__isnull=True)).count()
-        count_15_20 = qs.filter(idol_height__gte=15, idol_height__lt=21).count()
-        count_21_25 = qs.filter(idol_height__gte=21, idol_height__lt=26).count()
-        count_26_plus = qs.filter(idol_height__gte=26).count()
-
-        active_assigned_idol_ids = set(
-            Assignment.objects.filter(
-                is_active=True,
-                idol__in=qs
-            ).values_list('idol_id', flat=True)
-        )
-        assigned_count = len(active_assigned_idol_ids)
-        unassigned_count = max(0, total_eligible - assigned_count)
-
-        # Rule 5: Zone filter
+        # 1. Zone filter
         zone = request.query_params.get('zone')
         if zone and zone not in ['All Zones', 'all', '']:
             qs = qs.filter(zone__iexact=zone.strip())
 
-        # Rule 6: Police Station filter
+        # 2. Police Station filter
         ps = request.query_params.get('police_station')
         if ps and ps not in ['All Police Stations', 'all', '']:
             qs = qs.filter(police_station__iexact=ps.strip())
 
-        # Rule 4: Height bucket filter (AND composition)
+        # 3. Visarjan Date filter (AND composition with Asia/Kolkata local date)
+        visarjan_date = request.query_params.get('visarjan_date')
+        if visarjan_date and visarjan_date not in ['All Dates', 'all', '']:
+            vdate_clean = visarjan_date.lower().strip()
+            from datetime import timedelta, datetime
+            from django.utils import timezone
+            today = timezone.localdate()
+            if vdate_clean == 'today':
+                qs = qs.filter(immersion_date=today)
+            elif vdate_clean == 'tomorrow':
+                qs = qs.filter(immersion_date=today + timedelta(days=1))
+            else:
+                try:
+                    target_date = datetime.strptime(vdate_clean, '%Y-%m-%d').date()
+                    qs = qs.filter(immersion_date=target_date)
+                except ValueError:
+                    pass
+
+        # 4. Secondary search (respects all active filters)
+        search = request.query_params.get('search')
+        if search:
+            search = search.strip()
+            qs = qs.filter(
+                Q(gpid__icontains=search) |
+                Q(name__icontains=search) |
+                Q(association_name__icontains=search) |
+                Q(police_station__icontains=search)
+            )
+
+        # 5. Height bucket filter (AND composition)
         hb = request.query_params.get('height_bucket')
         if hb and hb not in ['All Heights', 'all', 'all_heights', '']:
             hb_clean = hb.lower().strip()
@@ -284,42 +297,37 @@ class AssignableIdolRegistryView(APIView):
             elif hb_clean in ['all_15_plus', '15_plus', '15+']:
                 qs = qs.filter(idol_height__gte=15)
 
-        # Rule 7: Assignment status filter (AND composition)
+        # 6. Assignment status filter (AND composition)
         assignment_status = request.query_params.get('assignment_status')
         if assignment_status and assignment_status.lower() != 'all':
             astat = assignment_status.lower().strip()
             if astat == 'assigned':
-                qs = qs.filter(id__in=active_assigned_idol_ids)
+                qs = qs.filter(assignments__is_active=True).distinct()
             elif astat == 'unassigned':
-                qs = qs.exclude(id__in=active_assigned_idol_ids)
+                qs = qs.exclude(assignments__is_active=True)
 
-        # Visarjan Date filter (AND composition)
-        visarjan_date = request.query_params.get('visarjan_date')
-        if visarjan_date and visarjan_date not in ['All Dates', 'all', '']:
-            vdate_clean = visarjan_date.lower().strip()
-            from datetime import date, timedelta, datetime
-            today = date.today()
-            if vdate_clean == 'today':
-                qs = qs.filter(immersion_date=today)
-            elif vdate_clean == 'tomorrow':
-                qs = qs.filter(immersion_date=today + timedelta(days=1))
-            else:
-                try:
-                    target_date = datetime.strptime(vdate_clean, '%Y-%m-%d').date()
-                    qs = qs.filter(immersion_date=target_date)
-                except ValueError:
-                    pass
+        # Rule 10 & Addendum: Authoritative summary KPIs computed on this EXACT filtered population!
+        total_eligible = qs.count()
+        height_aggs = qs.aggregate(
+            count_below_15=Count('id', filter=Q(idol_height__lt=15) | Q(idol_height__isnull=True)),
+            count_15_20=Count('id', filter=Q(idol_height__gte=15, idol_height__lt=21)),
+            count_21_25=Count('id', filter=Q(idol_height__gte=21, idol_height__lt=26)),
+            count_26_plus=Count('id', filter=Q(idol_height__gte=26)),
+        )
+        count_below_15 = height_aggs['count_below_15'] or 0
+        count_15_20 = height_aggs['count_15_20'] or 0
+        count_21_25 = height_aggs['count_21_25'] or 0
+        count_26_plus = height_aggs['count_26_plus'] or 0
 
-        # Rule 8: Secondary search (respects all active filters & 15 FT rule)
-        search = request.query_params.get('search')
-        if search:
-            search = search.strip()
-            qs = qs.filter(
-                Q(gpid__icontains=search) |
-                Q(name__icontains=search) |
-                Q(association_name__icontains=search) |
-                Q(police_station__icontains=search)
-            )
+        if assignment_status and assignment_status.lower().strip() == 'assigned':
+            assigned_count = total_eligible
+            unassigned_count = 0
+        elif assignment_status and assignment_status.lower().strip() == 'unassigned':
+            assigned_count = 0
+            unassigned_count = total_eligible
+        else:
+            assigned_count = qs.filter(assignments__is_active=True).distinct().count()
+            unassigned_count = max(0, total_eligible - assigned_count)
 
         # Rule 12: Operational sorting (Zone -> Police Station -> Height -> GPID)
         ordering = request.query_params.get('ordering')

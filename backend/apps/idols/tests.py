@@ -184,12 +184,21 @@ class IdolOperationalFilterAPITests(TestCase):
             zone='Khairatabad',
             police_station='Abids'
         )
+        # 11. Idol 14 ft (Below 15ft) - Today
+        Idol.objects.create(
+            gpid='HYDCMRZBHNR0011',
+            name='Subthreshold 14ft',
+            idol_height=14.0,
+            immersion_date=self.today,
+            zone='Charminar',
+            police_station='Bahadurpura'
+        )
 
     def test_default_list_excludes_subthreshold_and_null(self):
-        """Default idol list only returns operational idols (>= 15 ft)."""
+        """Default idol list (/api/v1/idols/) still returns operational idols (>= 15 ft)."""
         res = self.client.get('/api/v1/idols/')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        # Out of 10 idols: 2 are < 15, 1 is NULL -> 7 are >= 15 ft
+        # Out of 11 idols: 3 are < 15 (10ft, 14ft, 14.99ft), 1 is NULL -> 7 are >= 15 ft
         self.assertEqual(res.data['count'], 7)
         for item in res.data['results']:
             self.assertGreaterEqual(float(item['idol_height']), 15.0)
@@ -223,14 +232,14 @@ class IdolOperationalFilterAPITests(TestCase):
             self.assertEqual(item['height_classification'], 'RED')
 
     def test_immersions_today_filter(self):
-        """Test immersions_today=true returns only 15+ ft idols immersing today."""
+        """Test immersions_today=true returns only 15+ ft idols immersing today for list view."""
         res = self.client.get('/api/v1/idols/?immersions_today=true')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         # Eligible >= 15 today: 15ft (3), 18ft (4), 21ft (6), 26ft (8) -> 4 idols
-        # Subthreshold 1 (10ft) and Null height (10) immerse today but MUST be excluded!
         self.assertEqual(res.data['count'], 4)
         gpids = [i['gpid'] for i in res.data['results']]
         self.assertNotIn('HYDCMRZBHNR0001', gpids)
+        self.assertNotIn('HYDCMRZBHNR0011', gpids)
         self.assertNotIn('HYDKTBZABID0010', gpids)
 
     def test_combined_filters_composition(self):
@@ -241,87 +250,139 @@ class IdolOperationalFilterAPITests(TestCase):
         self.assertEqual(res.data['count'], 1)
         self.assertEqual(res.data['results'][0]['gpid'], 'HYDCMRZBHNR0003')
 
-    def test_dashboard_kpis_and_marker_deduplication(self):
+    def test_main_dashboard_today_visarjan_across_all_heights(self):
         """
-        Dashboard stats must calculate KPIs on the 15+ ft population only
-        and guarantee One GPID = One Map Marker.
+        Main Dashboard must show ALL authoritative GPIDs whose immersion_date is TODAY
+        across all heights (10ft, 14ft, 15ft, 18ft, 21ft, 26ft, NULL).
+        Yesterday and tomorrow idols must NOT appear in today's dashboard population.
         """
-        # Assign constable to 15ft idol (HYDCMRZBHNR0003)
+        res = self.client.get('/api/v1/idols/dashboard/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        kpis = res.data['kpis']
+        # Today idols: 10ft (1), 14ft (11), 15ft (3), 18ft (4), 21ft (6), 26ft (8), NULL (10) -> exactly 7 idols!
+        self.assertEqual(kpis['total_idols'], 7)
+        self.assertEqual(kpis['immersions_today'], 7)
+
+        # Height distribution across today's complete population
+        self.assertEqual(kpis['h_below_15'], 3)  # 10ft, 14ft, NULL
+        self.assertEqual(kpis['h_15_20'], 2)     # 15ft, 18ft
+        self.assertEqual(kpis['h_21_25'], 1)     # 21ft
+        self.assertEqual(kpis['h_26_plus'], 1)   # 26ft
+
+    def test_yesterday_and_tomorrow_excluded_from_main_dashboard(self):
+        """Yesterday and tomorrow idols must NOT be included in today's population."""
+        res = self.client.get('/api/v1/idols/dashboard/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Check zone totals for today
+        zone_stats = {z['zone']: z['total'] for z in res.data['zone_stats']}
+        # Yesterday's 14.99ft in Charminar, 25ft in Golconda must be excluded
+        # Tomorrow's 20ft in Golconda, 30ft in Khairatabad must be excluded
+        # Today in Charminar: 10ft, 14ft, 15ft, 18ft -> 4
+        # Today in Golconda: 21ft -> 1
+        # Today in Khairatabad: 26ft, NULL -> 2
+        self.assertEqual(zone_stats.get('Charminar'), 4)
+        self.assertEqual(zone_stats.get('Golconda'), 1)
+        self.assertEqual(zone_stats.get('Khairatabad'), 2)
+
+    def test_today_gpid_without_coordinates_has_no_fabricated_map_marker(self):
+        """
+        Today's GPIDs without valid coordinates remain in population/KPIs,
+        but must NOT have fabricated map markers.
+        """
+        res = self.client.get('/api/v1/idols/dashboard/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # None of the setUp idols have coordinates yet, and no active tracking session
+        self.assertEqual(res.data['kpis']['total_idols'], 7)
+        self.assertEqual(res.data['active_markers_count'], 0)
+        self.assertEqual(len(res.data['active_markers']), 0)
+
+    def test_today_gpid_with_valid_coordinates_gets_map_marker(self):
+        """
+        Today's idols across all heights with valid coordinates get map markers.
+        """
+        # Give 10ft idol (HYDCMRZBHNR0001) coordinates
+        idol_1 = Idol.objects.get(gpid='HYDCMRZBHNR0001')
+        idol_1.latitude = 17.3510
+        idol_1.longitude = 78.4610
+        idol_1.geocoding_status = 'GEOCODED'
+        idol_1.save()
+
+        # Give 18ft idol (HYDCMRZBHNR0004) coordinates
+        idol_4 = Idol.objects.get(gpid='HYDCMRZBHNR0004')
+        idol_4.latitude = 17.3550
+        idol_4.longitude = 78.4660
+        idol_4.geocoding_status = 'GEOCODED'
+        idol_4.save()
+
+        # Give tomorrow's idol (HYDGLKZGOLC0005) coordinates
+        idol_5 = Idol.objects.get(gpid='HYDGLKZGOLC0005')
+        idol_5.latitude = 17.3800
+        idol_5.longitude = 78.4200
+        idol_5.geocoding_status = 'GEOCODED'
+        idol_5.save()
+
+        res = self.client.get('/api/v1/idols/dashboard/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        marker_gpids = [m['gpid'] for m in res.data['active_markers']]
+        # Today's idols with coordinates appear on map
+        self.assertIn('HYDCMRZBHNR0001', marker_gpids)
+        self.assertIn('HYDCMRZBHNR0004', marker_gpids)
+        # Tomorrow's idol does NOT appear on map
+        self.assertNotIn('HYDGLKZGOLC0005', marker_gpids)
+        # 10ft idol has SUBTHRESHOLD classification
+        m1 = next(m for m in res.data['active_markers'] if m['gpid'] == 'HYDCMRZBHNR0001')
+        self.assertEqual(m1['height_classification'], 'SUBTHRESHOLD')
+
+    def test_dashboard_height_filters_on_today_population(self):
+        """Height filters applied on Main Dashboard filter today's population."""
+        # Below 15ft: 10ft, 14ft, NULL -> 3
+        res = self.client.get('/api/v1/idols/dashboard/?height_bucket=below_15')
+        self.assertEqual(res.data['kpis']['total_idols'], 3)
+
+        # 15–20ft: 15ft, 18ft -> 2
+        res = self.client.get('/api/v1/idols/dashboard/?height_bucket=15_20')
+        self.assertEqual(res.data['kpis']['total_idols'], 2)
+
+        # 21–25ft: 21ft -> 1
+        res = self.client.get('/api/v1/idols/dashboard/?height_bucket=21_25')
+        self.assertEqual(res.data['kpis']['total_idols'], 1)
+
+        # 26+ ft: 26ft -> 1
+        res = self.client.get('/api/v1/idols/dashboard/?height_bucket=above_25')
+        self.assertEqual(res.data['kpis']['total_idols'], 1)
+
+        # ALL: all 7
+        res = self.client.get('/api/v1/idols/dashboard/?height_bucket=ALL')
+        self.assertEqual(res.data['kpis']['total_idols'], 7)
+
+    def test_dashboard_active_tracking_session_marker_priority(self):
+        """Active tracking sessions take marker precedence and deduplicate properly."""
         constable = User.objects.create_user(
-            username='constable_test_1',
+            username='constable_dash_1',
             password='test_password_123',
             role=UserRole.CONSTABLE,
-            police_id='CONST-101',
+            police_id='CONST-201',
             police_station='Bahadurpura'
         )
         idol_3 = Idol.objects.get(gpid='HYDCMRZBHNR0003')
         assign = Assignment.assign_constable(idol=idol_3, constable=constable, assigned_by=self.user)
 
-        # Create active tracking session 1
-        sess1 = TrackingSession.objects.create(assignment=assign, status=TrackingSessionStatus.ACTIVE)
-        LocationPoint.objects.create(session=sess1, latitude=17.3610, longitude=78.4710, recorded_at=timezone.now())
-
-        # Create multiple location points for the same session to test marker deduplication
-        LocationPoint.objects.create(session=sess1, latitude=17.3620, longitude=78.4720, recorded_at=timezone.now() + timedelta(seconds=10))
+        sess = TrackingSession.objects.create(assignment=assign, status=TrackingSessionStatus.ACTIVE)
+        LocationPoint.objects.create(session=sess, latitude=17.3610, longitude=78.4710, recorded_at=timezone.now())
+        LocationPoint.objects.create(session=sess, latitude=17.3620, longitude=78.4720, recorded_at=timezone.now() + timedelta(seconds=10))
 
         res = self.client.get('/api/v1/idols/dashboard/')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
 
-        kpis = res.data['kpis']
-        # 1. Total idols KPI must be 7 (eligible >=15ft), not 10!
-        self.assertEqual(kpis['total_idols'], 7)
-        # 2. Immersions today KPI must be 4 (eligible >=15ft today), not 6!
-        self.assertEqual(kpis['immersions_today'], 4)
-        # 3. Height buckets
-        self.assertEqual(kpis['h_15_20'], 3)
-        self.assertEqual(kpis['h_21_25'], 2)
-        self.assertEqual(kpis['h_26_plus'], 2)
-
-        # 4. Marker deduplication: exactly 1 marker for HYDCMRZBHNR0003 despite multiple location points!
         self.assertEqual(res.data['active_markers_count'], 1)
-        self.assertEqual(len(res.data['active_markers']), 1)
         marker = res.data['active_markers'][0]
         self.assertEqual(marker['gpid'], 'HYDCMRZBHNR0003')
-        self.assertEqual(marker['height_classification'], 'GREEN')
-        self.assertEqual(marker['latitude'], 17.3620)
         self.assertFalse(marker['is_origin_marker'])
-
-    def test_origin_vs_live_marker_priority_and_all_eligible_visibility(self):
-        """
-        Verify:
-        - Eligible idols with geocoded origin coordinates appear as origin markers (is_origin_marker: True).
-        - Eligible idols with live tracking sessions take precedence (is_origin_marker: False).
-        - Subthreshold idols are never returned on the map even if they have coordinates.
-        - Unresolved idols without coordinates do not generate fake markers.
-        """
-        # 1. Give an eligible idol (HYDCMRZBHNR0004, 18ft) geocoded origin coordinates
-        idol_4 = Idol.objects.get(gpid='HYDCMRZBHNR0004')
-        idol_4.latitude = 17.3555555
-        idol_4.longitude = 78.4666666
-        idol_4.geocoding_status = 'GEOCODED'
-        idol_4.save()
-
-        # 2. Give a subthreshold idol (<15ft, HYDCMRZBHNR0001, 10ft) coordinates
-        idol_1 = Idol.objects.get(gpid='HYDCMRZBHNR0001')
-        idol_1.latitude = 17.3511111
-        idol_1.longitude = 78.4611111
-        idol_1.geocoding_status = 'GEOCODED'
-        idol_1.save()
-
-        # Query dashboard
-        res = self.client.get('/api/v1/idols/dashboard/')
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
-
-        marker_gpids = [m['gpid'] for m in res.data['active_markers']]
-        # Subthreshold idol 1 must NOT be on map
-        self.assertNotIn('HYDCMRZBHNR0001', marker_gpids)
-        # Eligible idol 4 must be on map as origin marker
-        self.assertIn('HYDCMRZBHNR0004', marker_gpids)
-
-        m4 = next(m for m in res.data['active_markers'] if m['gpid'] == 'HYDCMRZBHNR0004')
-        self.assertTrue(m4['is_origin_marker'])
-        self.assertAlmostEqual(m4['latitude'], 17.3555555)
-        self.assertAlmostEqual(m4['longitude'], 78.4666666)
+        self.assertEqual(marker['latitude'], 17.3620)
 
 
 class GeocodingServiceTests(TestCase):

@@ -100,7 +100,7 @@ def filter_by_jurisdiction(queryset, user, ps_field='police_station', zone_field
 
     # MAIN_OFFICER: City-wide operational officer (or zone-scoped if assigned to a zone).
     if user.role == UserRole.MAIN_OFFICER:
-        if user_zone:
+        if user_zone and user_zone.lower() not in ['all', 'all zones', 'city-wide', 'city wide', 'citywide']:
             return queryset.filter(**{f"{zone_field}__iexact": user_zone})
         return queryset
 
