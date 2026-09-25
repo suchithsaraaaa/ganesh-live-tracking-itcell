@@ -47,6 +47,22 @@ class IdolListSerializer(serializers.ModelSerializer):
         ]
 
     start_gate_eligible = serializers.SerializerMethodField()
+    latitude = serializers.SerializerMethodField()
+    longitude = serializers.SerializerMethodField()
+
+    def get_latitude(self, obj):
+        if obj.latitude is not None:
+            return float(obj.latitude)
+        from apps.tracking.models import LocationPoint
+        lp = LocationPoint.objects.filter(session__assignment__idol=obj).order_by('-recorded_at').first()
+        return lp.latitude if lp else None
+
+    def get_longitude(self, obj):
+        if obj.longitude is not None:
+            return float(obj.longitude)
+        from apps.tracking.models import LocationPoint
+        lp = LocationPoint.objects.filter(session__assignment__idol=obj).order_by('-recorded_at').first()
+        return lp.longitude if lp else None
 
     def get_start_gate_eligible(self, obj):
         return bool(

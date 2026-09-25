@@ -508,3 +508,184 @@ class GeocodingServiceTests(TestCase):
         scored_high = score_candidate(high_cand, idol, 'street')
         self.assertIsNotNone(scored_high)
         self.assertEqual(scored_high[4], GeocodingConfidence.HIGH)
+
+
+class HoldingPointsConsistencyTests(TestCase):
+    """
+    Regression test suite for authoritative 'IN HOLDING' consistency across:
+    - Main Dashboard KPIs
+    - Main Dashboard Active Markers / Active Processions Table
+    - Holding Points Page API (/api/v1/idols/?procession_state=HOLDING)
+    - Jurisdiction Scoping
+    - Backward-compatibility with sub-15ft operational states
+    """
+    def setUp(self):
+        self.client = APIClient()
+        self.super_admin = User.objects.create_user(
+            username='admin_holding_test',
+            password='test_password_123',
+            role=UserRole.SUPER_ADMIN,
+            police_id='ADM-001'
+        )
+        self.sec_admin = User.objects.create_user(
+            username='sec_admin_test',
+            password='test_password_123',
+            role=UserRole.SYS_ADMIN,
+            police_id='SEC-ADM-001',
+            zone='Secunderabad'
+        )
+        self.rn_admin = User.objects.create_user(
+            username='rn_admin_test',
+            password='test_password_123',
+            role=UserRole.SYS_ADMIN,
+            police_id='RN-ADM-001',
+            zone='Rajendra Nagar'
+        )
+        self.today = timezone.localdate()
+
+        # 1. Held idol (sub-15ft: 12 FT, Amberpet, Secunderabad) - mimics production record HYDSECZAMBT1702
+        self.idol_holding_sec = Idol.objects.create(
+            gpid='HYDSECZAMBT1702',
+            name='Raghavender reddy',
+            zone='Secunderabad',
+            police_station='Amberpet',
+            ps_code='AMBT',
+            idol_height=12.0,
+            immersion_date=self.today,
+            procession_state='HOLDING'
+        )
+        # Create assignment, tracking session, and GPS points
+        constable = User.objects.create_user(
+            username='constable_holding_1',
+            password='test_password_123',
+            role=UserRole.CONSTABLE,
+            police_id='CONST-001'
+        )
+        asgn = Assignment.objects.create(
+            idol=self.idol_holding_sec,
+            constable=constable,
+            is_active=True
+        )
+        sess = TrackingSession.objects.create(
+            assignment=asgn,
+            status=TrackingSessionStatus.STOPPED,
+            started_at=timezone.now() - timedelta(minutes=30),
+            ended_at=timezone.now() - timedelta(minutes=10)
+        )
+        LocationPoint.objects.create(
+            session=sess,
+            latitude=17.3870,
+            longitude=78.5248,
+            speed=0.0,
+            recorded_at=timezone.now() - timedelta(minutes=11)
+        )
+
+        # 2. Moving idol (18 FT, Secunderabad)
+        self.idol_moving_sec = Idol.objects.create(
+            gpid='HYDSECZAMBT1800',
+            name='Moving Ganesh',
+            zone='Secunderabad',
+            police_station='Amberpet',
+            ps_code='AMBT',
+            idol_height=18.0,
+            immersion_date=self.today,
+            procession_state='MOVING',
+            latitude=17.3820,
+            longitude=78.5270
+        )
+
+        # 3. Not started idol (10 FT, Secunderabad)
+        self.idol_not_started = Idol.objects.create(
+            gpid='HYDSECZAMBT1000',
+            name='Small Unstarted Ganesh',
+            zone='Secunderabad',
+            police_station='Amberpet',
+            ps_code='AMBT',
+            idol_height=10.0,
+            immersion_date=self.today,
+            procession_state='NOT_STARTED'
+        )
+
+        # 4. Immersed idol (22 FT, Secunderabad)
+        self.idol_immersed = Idol.objects.create(
+            gpid='HYDSECZAMBT2200',
+            name='Immersed Ganesh',
+            zone='Secunderabad',
+            police_station='Amberpet',
+            ps_code='AMBT',
+            idol_height=22.0,
+            immersion_date=self.today,
+            procession_state='IMMERSION_COMPLETED',
+            latitude=17.3810,
+            longitude=78.5260
+        )
+
+    def test_gpid_in_holding_appears_in_dashboard_kpi_and_holding_points(self):
+        """Holding GPID (even sub-15ft) appears in Dashboard KPI and Holding Points API with equal counts."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # A. Main Dashboard API
+        res_dash = self.client.get('/api/v1/idols/dashboard/')
+        self.assertEqual(res_dash.status_code, status.HTTP_200_OK)
+        dash_holding_kpi = res_dash.data['kpis']['holding']
+        self.assertEqual(dash_holding_kpi, 1)
+
+        # Active markers includes holding idol with its GPS location
+        markers = res_dash.data['active_markers']
+        marker_gpids = [m['gpid'] for m in markers]
+        self.assertIn(self.idol_holding_sec.gpid, marker_gpids)
+        holding_marker = next(m for m in markers if m['gpid'] == self.idol_holding_sec.gpid)
+        self.assertEqual(holding_marker['procession_state'], 'HOLDING')
+        self.assertAlmostEqual(holding_marker['latitude'], 17.3870, places=4)
+        self.assertAlmostEqual(holding_marker['longitude'], 78.5248, places=4)
+
+        # B. Holding Points Page API (/api/v1/idols/?procession_state=HOLDING)
+        res_holding = self.client.get('/api/v1/idols/?procession_state=HOLDING')
+        self.assertEqual(res_holding.status_code, status.HTTP_200_OK)
+        holding_count = res_holding.data['count']
+        holding_gpids = [item['gpid'] for item in res_holding.data['results']]
+
+        self.assertEqual(dash_holding_kpi, holding_count)
+        self.assertEqual(holding_count, 1)
+        self.assertIn(self.idol_holding_sec.gpid, holding_gpids)
+
+    def test_non_holding_gpids_do_not_appear_in_holding_points(self):
+        """MOVING, NOT_STARTED, and IMMERSION_COMPLETED idols do not appear in holding query."""
+        self.client.force_authenticate(user=self.super_admin)
+        res = self.client.get('/api/v1/idols/?procession_state=HOLDING')
+        holding_gpids = [item['gpid'] for item in res.data['results']]
+
+        self.assertNotIn(self.idol_moving_sec.gpid, holding_gpids)
+        self.assertNotIn(self.idol_not_started.gpid, holding_gpids)
+        self.assertNotIn(self.idol_immersed.gpid, holding_gpids)
+
+    def test_jurisdiction_scoping_on_holding_data(self):
+        """Holding data is properly scoped by caller jurisdiction."""
+        # 1. Secunderabad Admin sees 1 holding idol
+        self.client.force_authenticate(user=self.sec_admin)
+        res_sec_dash = self.client.get('/api/v1/idols/dashboard/')
+        self.assertEqual(res_sec_dash.data['kpis']['holding'], 1)
+        res_sec_list = self.client.get('/api/v1/idols/?procession_state=HOLDING')
+        self.assertEqual(res_sec_list.data['count'], 1)
+        self.assertEqual(res_sec_list.data['results'][0]['gpid'], self.idol_holding_sec.gpid)
+
+        # 2. Rajendra Nagar Admin sees 0 holding idols
+        self.client.force_authenticate(user=self.rn_admin)
+        res_rn_dash = self.client.get('/api/v1/idols/dashboard/')
+        self.assertEqual(res_rn_dash.data['kpis']['holding'], 0)
+        res_rn_list = self.client.get('/api/v1/idols/?procession_state=HOLDING')
+        self.assertEqual(res_rn_list.data['count'], 0)
+
+    def test_general_registry_browsing_still_excludes_sub_15ft(self):
+        """General idol list (/api/v1/idols/ without state filter) preserves standard >= 15 FT threshold."""
+        self.client.force_authenticate(user=self.super_admin)
+        res = self.client.get('/api/v1/idols/')
+        gpids = [item['gpid'] for item in res.data['results']]
+
+        # 18ft and 22ft included
+        self.assertIn(self.idol_moving_sec.gpid, gpids)
+        self.assertIn(self.idol_immersed.gpid, gpids)
+        # 10ft unstarted and 12ft (sub-15ft in general browsing) excluded
+        self.assertNotIn(self.idol_not_started.gpid, gpids)
+        self.assertNotIn(self.idol_holding_sec.gpid, gpids)
+

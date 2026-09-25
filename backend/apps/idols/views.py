@@ -70,12 +70,31 @@ def apply_idol_filters(qs, params, user=None, is_dashboard=False):
                 qs = qs.filter(immersion_date=today)
         else:
             # Default for Main Dashboard: today's Visarjan date in Asia/Kolkata
-            qs = qs.filter(immersion_date=today)
+            # plus any idols currently in active operational states (carrying over from prior days)
+            qs = qs.filter(
+                Q(immersion_date=today) |
+                Q(procession_state__in=[
+                    ProcessionState.TRACKING,
+                    ProcessionState.MOVING,
+                    ProcessionState.HOLDING,
+                    ProcessionState.AT_VISARJAN,
+                ])
+            )
     else:
-        # 1. Operational 15+ ft threshold enforcement for non-dashboard views
-        include_subthreshold = params.get('include_subthreshold', '').lower() in ['true', '1', 'yes']
-        if not (include_subthreshold and user and getattr(user, 'role', None) == 'MAIN_OFFICER'):
-            qs = qs.filter(idol_height__gte=15)
+        # 1. Operational 15+ ft threshold enforcement for non-dashboard views:
+        # If querying for active operational procession states (such as HOLDING, MOVING, TRACKING, AT_VISARJAN),
+        # all idols in that operational state are returned across all heights unless an explicit height filter is provided.
+        # Otherwise, the standard 15+ FT threshold applies for general registry browsing.
+        procession_state = params.get('procession_state')
+        is_operational_state = bool(
+            procession_state and procession_state.upper() not in ['ALL', 'NOT_STARTED']
+        )
+        if not is_operational_state:
+            include_subthreshold = params.get('include_subthreshold', '').lower() in ['true', '1', 'yes']
+            user_role = getattr(user, 'role', None)
+            is_admin = bool(user and (user.is_superuser or user_role in ['MAIN_OFFICER', 'SUPER_ADMIN', 'SYS_ADMIN']))
+            if not (include_subthreshold and is_admin):
+                qs = qs.filter(idol_height__gte=15)
 
         # Date filtering for non-dashboard
         immersions_today = params.get('immersions_today', '').lower() in ['true', '1', 'yes']
@@ -203,10 +222,18 @@ class DashboardStatsView(APIView):
             for a in Assignment.objects.filter(idol__in=qs, is_active=True).select_related('constable')
         }
 
-        # Query active tracking sessions for map markers (priority live telemetry)
+        # Query tracking sessions for map markers (priority live telemetry):
+        # Includes ACTIVE sessions, plus the latest session for idols in active procession states (HOLDING, MOVING, AT_VISARJAN)
         active_sessions = list(TrackingSession.objects.filter(
-            assignment__idol__in=qs,
-            status=TrackingSessionStatus.ACTIVE
+            assignment__idol__in=qs
+        ).filter(
+            Q(status=TrackingSessionStatus.ACTIVE) |
+            Q(assignment__idol__procession_state__in=[
+                ProcessionState.TRACKING,
+                ProcessionState.MOVING,
+                ProcessionState.HOLDING,
+                ProcessionState.AT_VISARJAN,
+            ])
         ).select_related('assignment__idol', 'assignment__constable').order_by('-started_at'))
 
         # Batch-fetch latest location points for all active sessions to eliminate N+1 queries
