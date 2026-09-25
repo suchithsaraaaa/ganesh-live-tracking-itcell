@@ -192,10 +192,11 @@ export const UsersPage: React.FC = () => {
     if (!selectedZone || selectedZone === 'All Zones') {
       return Array.from(new Set(policeStations.map((ps) => ps.ps_name))).sort();
     }
+    const cleanSelected = selectedZone.replace(/\s+/g, '').toLowerCase();
     return Array.from(
       new Set(
         policeStations
-          .filter((ps) => (ps.zone || '').trim().toLowerCase() === selectedZone.trim().toLowerCase())
+          .filter((ps) => (ps.zone || '').replace(/\s+/g, '').toLowerCase() === cleanSelected)
           .map((ps) => ps.ps_name)
       )
     ).sort();
@@ -206,9 +207,10 @@ export const UsersPage: React.FC = () => {
     setSelectedZone(zone);
     if (selectedStation !== 'All Police Stations') {
       if (zone !== 'All Zones') {
+        const cleanZone = zone.replace(/\s+/g, '').toLowerCase();
         const belongs = policeStations.some(
           (ps) =>
-            (ps.zone || '').trim().toLowerCase() === zone.trim().toLowerCase() &&
+            (ps.zone || '').replace(/\s+/g, '').toLowerCase() === cleanZone &&
             (ps.ps_name || '').trim().toLowerCase() === selectedStation.trim().toLowerCase()
         );
         if (!belongs) {

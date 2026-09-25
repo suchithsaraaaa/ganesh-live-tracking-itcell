@@ -645,8 +645,9 @@ class ActiveTrackingListView(APIView):
 
         # Unified active procession filters
         zone = request.query_params.get('zone')
-        if zone and zone != 'All Zones':
-            qs = qs.filter(assignment__idol__zone__iexact=zone)
+        if zone and zone not in ['All Zones', 'all', '']:
+            from common.zones import zone_filter_q
+            qs = qs.filter(zone_filter_q('assignment__idol__zone', zone))
 
         ps = request.query_params.get('police_station')
         if ps:

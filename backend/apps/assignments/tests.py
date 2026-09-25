@@ -1359,4 +1359,165 @@ class AllAuthoritativeGPIDsAssignmentTrackingTests(TestCase):
         self.assertEqual(res.data['count'], 6)
 
 
+class RajendraNagarZoneAssignmentTests(TestCase):
+    """
+    Targeted test suite verifying canonical Rajendra Nagar zone filtering,
+    backward-compatible normalization, height distribution, and Zonal SYS_ADMIN jurisdiction.
+    """
+
+    def setUp(self):
+        from rest_framework.test import APIClient
+        from apps.idols.models import ProcessionState
+        from django.utils import timezone
+        from datetime import timedelta
+        self.client = APIClient()
+        self.today = timezone.localdate()
+        self.tomorrow = self.today + timedelta(days=1)
+
+        self.super_admin = User.objects.create_superuser(
+            username='super_admin_rn_test', password='password123',
+            role=UserRole.SUPER_ADMIN
+        )
+
+        # Charminar idol
+        self.idol_cmr = Idol.objects.create(
+            gpid='HYDCMRZCMNR1010', name='Lalitha Pandal 10ft',
+            police_station='Charminar', zone='Charminar',
+            idol_height=10.0, immersion_date=self.today,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+
+        # Secunderabad idol
+        self.idol_sec = Idol.objects.create(
+            gpid='HYDSECZGPLP2010', name='Secunderabad Idol 10ft',
+            police_station='Gopalpuram', zone='Secunderabad',
+            idol_height=10.0, immersion_date=self.today,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+
+        # Rajendra Nagar idols (Authoritative zone name has space)
+        self.idol_rn_10ft = Idol.objects.create(
+            gpid='HYDRNGZATPR3010', name='Attapur Colony 10ft',
+            police_station='Attapur', zone='Rajendra Nagar',
+            idol_height=10.0, immersion_date=self.today,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+        self.idol_rn_18ft = Idol.objects.create(
+            gpid='HYDRNGZATPR3018', name='Attapur Main 18ft',
+            police_station='Attapur', zone='Rajendra Nagar',
+            idol_height=18.0, immersion_date=self.today,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+        self.idol_rn_22ft = Idol.objects.create(
+            gpid='HYDRNGZRNGR3022', name='Rajendranagar 22ft',
+            police_station='Rajendranagar', zone='Rajendra Nagar',
+            idol_height=22.0, immersion_date=self.today,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+        self.idol_rn_tom_10ft = Idol.objects.create(
+            gpid='HYDRNGZMLDP3011', name='Mailardevpally 10ft Tomorrow',
+            police_station='Mailardevpally', zone='Rajendra Nagar',
+            idol_height=10.0, immersion_date=self.tomorrow,
+            procession_state=ProcessionState.NOT_STARTED
+        )
+
+        # Zonal SYS_ADMIN for Rajendra Nagar (stored as Rajendranagar in DB matching production)
+        self.sysadmin_rn = User.objects.create_user(
+            username='sysadmin_rajendranagar', password='password123',
+            role=UserRole.SYS_ADMIN, zone='Rajendranagar'
+        )
+
+    def test_01_rajendra_nagar_zone_filter_returns_records(self):
+        """Authoritative 'Rajendra Nagar' zone filter returns all Rajendra Nagar records."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # 1. 'Rajendra Nagar' all dates: returns all 4 Rajendra Nagar idols
+        res_rn = self.client.get('/api/v1/assignments/registry/?zone=Rajendra Nagar')
+        self.assertEqual(res_rn.status_code, 200)
+        self.assertEqual(res_rn.data['count'], 4)
+        s_rn = res_rn.data['summary']
+        self.assertEqual(s_rn['total_eligible'], 4)
+        self.assertEqual(s_rn['count_below_15'], 2)  # rn_10ft, rn_tom_10ft
+        self.assertEqual(s_rn['count_15_20'], 1)     # rn_18ft
+        self.assertEqual(s_rn['count_21_25'], 1)     # rn_22ft
+
+        # 2. Legacy 'Rajendranagar' query resolves identically to canonical
+        res_rn_legacy = self.client.get('/api/v1/assignments/registry/?zone=Rajendranagar')
+        self.assertEqual(res_rn_legacy.status_code, 200)
+        self.assertEqual(res_rn_legacy.data['count'], 4)
+        self.assertEqual(res_rn_legacy.data['summary']['total_eligible'], 4)
+
+    def test_02_rajendra_nagar_date_filters(self):
+        """Rajendra Nagar + Today and Tomorrow return exact filtered date populations."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # Rajendra Nagar + Today: exactly today's 3 records (10ft, 18ft, 22ft)
+        res_today = self.client.get('/api/v1/assignments/registry/?zone=Rajendra Nagar&visarjan_date=today')
+        self.assertEqual(res_today.status_code, 200)
+        self.assertEqual(res_today.data['count'], 3)
+        s_today = res_today.data['summary']
+        self.assertEqual(s_today['total_eligible'], 3)
+        self.assertEqual(s_today['count_below_15'], 1)
+        self.assertEqual(s_today['count_15_20'], 1)
+        self.assertEqual(s_today['count_21_25'], 1)
+        self.assertEqual(s_today['count_26_plus'], 0)
+
+        # Rajendra Nagar + Tomorrow: exactly tomorrow's 1 record
+        res_tom = self.client.get('/api/v1/assignments/registry/?zone=Rajendra Nagar&visarjan_date=tomorrow')
+        self.assertEqual(res_tom.status_code, 200)
+        self.assertEqual(res_tom.data['count'], 1)
+        self.assertEqual(res_tom.data['summary']['total_eligible'], 1)
+        self.assertEqual(res_tom.data['results'][0]['gpid'], self.idol_rn_tom_10ft.gpid)
+
+    def test_03_rajendra_nagar_height_and_police_station_filters(self):
+        """Rajendra Nagar combined with height buckets and police station cascading."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        # Rajendra Nagar + Below 15 FT: 2 records across all dates
+        res_sub = self.client.get('/api/v1/assignments/registry/?zone=Rajendra Nagar&height_bucket=below_15')
+        self.assertEqual(res_sub.status_code, 200)
+        self.assertEqual(res_sub.data['count'], 2)
+        self.assertEqual(res_sub.data['summary']['total_eligible'], 2)
+
+        # Rajendra Nagar + 15–20 FT: 1 record
+        res_15_20 = self.client.get('/api/v1/assignments/registry/?zone=Rajendra Nagar&height_bucket=15_20')
+        self.assertEqual(res_15_20.status_code, 200)
+        self.assertEqual(res_15_20.data['count'], 1)
+        self.assertEqual(res_15_20.data['summary']['total_eligible'], 1)
+
+        # Rajendra Nagar + Specific Police Station (Attapur): 2 records
+        res_ps = self.client.get('/api/v1/assignments/registry/?zone=Rajendra Nagar&police_station=Attapur')
+        self.assertEqual(res_ps.status_code, 200)
+        self.assertEqual(res_ps.data['count'], 2)
+        self.assertEqual(res_ps.data['summary']['total_eligible'], 2)
+
+    def test_04_other_zones_continue_working(self):
+        """Selecting other zones continues to return their respective records."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        res_cmr = self.client.get('/api/v1/assignments/registry/?zone=Charminar')
+        self.assertEqual(res_cmr.status_code, 200)
+        self.assertEqual(res_cmr.data['count'], 1)
+
+        res_sec = self.client.get('/api/v1/assignments/registry/?zone=Secunderabad')
+        self.assertEqual(res_sec.status_code, 200)
+        self.assertEqual(res_sec.data['count'], 1)
+
+    def test_05_rajendra_nagar_zonal_sysadmin_jurisdiction(self):
+        """Zonal SYS_ADMIN for Rajendra Nagar can only access Rajendra Nagar idols."""
+        self.client.force_authenticate(user=self.sysadmin_rn)
+
+        # Sees all 4 Rajendra Nagar idols
+        res = self.client.get('/api/v1/assignments/registry/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['count'], 4)
+        for item in res.data['results']:
+            self.assertEqual(item['zone'], 'Rajendra Nagar')
+
+        # Attempting override for Charminar fails to leak Charminar idols
+        res_override = self.client.get('/api/v1/assignments/registry/?zone=Charminar')
+        self.assertEqual(res_override.status_code, 200)
+        self.assertEqual(res_override.data['count'], 0)
+
+
 

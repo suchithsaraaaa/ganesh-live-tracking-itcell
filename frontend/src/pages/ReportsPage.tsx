@@ -74,8 +74,9 @@ export const ReportsPage: React.FC = () => {
     if (!selectedZone || selectedZone === 'All Zones') {
       return policeStations.map((ps) => ps.ps_name).sort();
     }
+    const cleanSelected = selectedZone.replace(/\s+/g, '').toLowerCase();
     return policeStations
-      .filter((ps) => ps.zone.toLowerCase() === selectedZone.toLowerCase())
+      .filter((ps) => (ps.zone || '').replace(/\s+/g, '').toLowerCase() === cleanSelected)
       .map((ps) => ps.ps_name)
       .sort();
   }, [policeStations, selectedZone]);

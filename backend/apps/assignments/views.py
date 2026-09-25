@@ -246,7 +246,8 @@ class AssignableIdolRegistryView(APIView):
         # 1. Zone filter
         zone = request.query_params.get('zone')
         if zone and zone not in ['All Zones', 'all', '']:
-            qs = qs.filter(zone__iexact=zone.strip())
+            from common.zones import zone_filter_q
+            qs = qs.filter(zone_filter_q('zone', zone.strip()))
 
         # 2. Police Station filter
         ps = request.query_params.get('police_station')
@@ -614,7 +615,8 @@ class AssignmentExportExcelView(APIView):
         # Filters
         zone = request.query_params.get('zone')
         if zone and zone not in ['All Zones', 'all', '']:
-            qs = qs.filter(zone__iexact=zone.strip())
+            from common.zones import zone_filter_q
+            qs = qs.filter(zone_filter_q('zone', zone.strip()))
 
         ps = request.query_params.get('police_station')
         if ps and ps not in ['All Police Stations', 'all', '']:

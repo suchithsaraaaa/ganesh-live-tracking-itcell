@@ -76,7 +76,8 @@ class CompletedReportsRegistryView(APIView):
         # Zone filter
         zone = request.query_params.get('zone')
         if zone and zone not in ['All Zones', 'all', '']:
-            filtered_qs = filtered_qs.filter(zone__iexact=zone.strip())
+            from common.zones import zone_filter_q
+            filtered_qs = filtered_qs.filter(zone_filter_q('zone', zone.strip()))
 
         # Police Station filter
         ps = request.query_params.get('police_station')

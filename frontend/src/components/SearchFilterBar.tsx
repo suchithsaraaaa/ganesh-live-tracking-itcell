@@ -23,7 +23,7 @@ const ZONES = [
   'Golconda',
   'Jubilee Hills',
   'Khairatabad',
-  'Rajendranagar',
+  'Rajendra Nagar',
 ];
 
 export const SearchFilterBar: React.FC<SearchFilterBarProps> = ({

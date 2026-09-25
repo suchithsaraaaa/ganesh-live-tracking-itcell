@@ -119,8 +119,9 @@ def apply_idol_filters(qs, params, user=None, is_dashboard=False):
 
     # 4. Jurisdiction / Location filters
     zone = params.get('zone')
-    if zone and zone != 'All Zones':
-        qs = qs.filter(zone__iexact=zone)
+    if zone and zone not in ['All Zones', 'all', 'ALL', '']:
+        from common.zones import zone_filter_q
+        qs = qs.filter(zone_filter_q('zone', zone))
 
     division = params.get('division')
     if division:

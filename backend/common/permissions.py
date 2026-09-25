@@ -95,18 +95,21 @@ def filter_by_jurisdiction(queryset, user, ps_field='police_station', zone_field
     # If no zone is assigned, DO NOT silently treat as city-wide — enforce safest restriction (none).
     if user.role == UserRole.SYS_ADMIN:
         if user_zone:
-            return queryset.filter(**{f"{zone_field}__iexact": user_zone})
+            from common.zones import zone_filter_q
+            return queryset.filter(zone_filter_q(zone_field, user_zone))
         return queryset.none()
 
     # MAIN_OFFICER: City-wide operational officer (or zone-scoped if assigned to a zone).
     if user.role == UserRole.MAIN_OFFICER:
         if user_zone and user_zone.lower() not in ['all', 'all zones', 'city-wide', 'city wide', 'citywide']:
-            return queryset.filter(**{f"{zone_field}__iexact": user_zone})
+            from common.zones import zone_filter_q
+            return queryset.filter(zone_filter_q(zone_field, user_zone))
         return queryset
 
     if user.role == UserRole.ACP:
         if user_zone:
-            return queryset.filter(**{f"{zone_field}__iexact": user_zone})
+            from common.zones import zone_filter_q
+            return queryset.filter(zone_filter_q(zone_field, user_zone))
         if user.division:
             return queryset.filter(**{f"{division_field}__iexact": user.division})
         return queryset.none()

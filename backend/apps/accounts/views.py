@@ -74,7 +74,8 @@ class UserListCreateView(APIView):
         # 1. Zone filter
         zone = request.query_params.get('zone')
         if zone and zone != 'ALL' and zone.lower() != 'all zones':
-            qs = qs.filter(zone__iexact=zone.strip())
+            from common.zones import zone_filter_q
+            qs = qs.filter(zone_filter_q('zone', zone.strip()))
 
         # 2. Police Station filter
         police_station = request.query_params.get('police_station')
@@ -274,19 +275,22 @@ class AssignableOfficerDirectoryView(APIView):
                 qs = qs.none()
         elif caller.role == UserRole.SYS_ADMIN and not caller.is_superuser:
             if user_zone:
-                qs = qs.filter(zone__iexact=user_zone)
+                from common.zones import zone_filter_q
+                qs = qs.filter(zone_filter_q('zone', user_zone))
             else:
                 qs = qs.none()
         elif caller.role == UserRole.MAIN_OFFICER and not caller.is_superuser:
             if user_zone:
-                qs = qs.filter(zone__iexact=user_zone)
+                from common.zones import zone_filter_q
+                qs = qs.filter(zone_filter_q('zone', user_zone))
 
         # Optional zone filter if authorized
         requested_zone = request.query_params.get('zone')
         if requested_zone:
-            if not caller.is_superuser and user_zone and user_zone.lower() != requested_zone.strip().lower():
+            from common.zones import normalize_zone, zone_filter_q
+            if not caller.is_superuser and user_zone and normalize_zone(user_zone).lower() != normalize_zone(requested_zone).lower():
                 return Response({'error': 'Cannot view officers outside your zone jurisdiction.'}, status=status.HTTP_403_FORBIDDEN)
-            qs = qs.filter(zone__iexact=requested_zone)
+            qs = qs.filter(zone_filter_q('zone', requested_zone))
 
         # Optional station filter if authorized
         requested_ps = request.query_params.get('police_station')

@@ -9,6 +9,8 @@ class UserSerializer(serializers.ModelSerializer):
     permissions = serializers.SerializerMethodField()
     effective_permissions = serializers.SerializerMethodField()
 
+    zone = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = [
@@ -36,9 +38,15 @@ class UserSerializer(serializers.ModelSerializer):
     def get_name(self, obj) -> str:
         return obj.get_full_name() or obj.username
 
+    def get_zone(self, obj) -> str:
+        from common.zones import normalize_zone
+        return normalize_zone(obj.zone) if obj.zone else ''
+
     def get_role_display(self, obj) -> str:
         if obj.role == UserRole.SYS_ADMIN:
-            return 'Zonal System Admin' if obj.zone else 'System Admin (Unassigned Zone)'
+            from common.zones import normalize_zone
+            z = normalize_zone(obj.zone)
+            return f"Zonal System Admin ({z})" if z else 'System Admin (Unassigned Zone)'
         if obj.role == UserRole.SUPER_ADMIN:
             return 'Super Administrator'
         if obj.role == UserRole.MAIN_OFFICER:
@@ -46,14 +54,15 @@ class UserSerializer(serializers.ModelSerializer):
         return obj.get_role_display()
 
     def get_jurisdiction_display(self, obj) -> str:
+        from common.zones import normalize_zone
         if obj.role == UserRole.SUPER_ADMIN:
             return 'City Wide'
         if obj.role == UserRole.MAIN_OFFICER:
-            return obj.zone if obj.zone else 'City Wide'
+            return normalize_zone(obj.zone) if obj.zone else 'City Wide'
         if obj.police_station:
             return obj.police_station
         if obj.zone:
-            return obj.zone
+            return normalize_zone(obj.zone)
         if obj.division:
             return obj.division
         return 'Unassigned'
@@ -166,9 +175,11 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
         role = attrs.get('role', self.instance.role if self.instance else UserRole.CONSTABLE)
         
         # Determine effective zone and police_station
+        from common.zones import normalize_zone
         zone = attrs.get('zone', self.instance.zone if self.instance else '')
         if zone:
-            zone = zone.strip()
+            zone = normalize_zone(zone.strip())
+            attrs['zone'] = zone
         police_station = attrs.get('police_station', self.instance.police_station if self.instance else '')
         if police_station:
             police_station = police_station.strip()
@@ -265,40 +276,42 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
             if caller.role == UserRole.SYS_ADMIN and not caller_zone:
                 errors['detail'] = ['Your System Administrator account has no assigned zone. Contact Super Admin.']
 
+            canonical_caller_zone = normalize_zone(caller_zone)
+
             # Target user zone boundary:
             if not self.instance:
                 # Creating new user: target zone MUST match caller's zone
                 if 'zone' in attrs and (attrs['zone'] or '').strip():
-                    if attrs['zone'].strip().lower() != caller_zone.lower():
-                        errors['zone'] = [f"Cannot create accounts outside your assigned zone ('{caller_zone}')."]
+                    if normalize_zone(attrs['zone']).lower() != canonical_caller_zone.lower():
+                        errors['zone'] = [f"Cannot create accounts outside your assigned zone ('{canonical_caller_zone}')."]
                     else:
-                        attrs['zone'] = caller_zone
+                        attrs['zone'] = canonical_caller_zone
                 else:
-                    attrs['zone'] = caller_zone
-                zone = caller_zone
+                    attrs['zone'] = canonical_caller_zone
+                zone = canonical_caller_zone
 
                 # Scope escape prevention: A zoned administrator cannot create a global / unzoned admin
                 if role in [UserRole.MAIN_OFFICER, UserRole.SYS_ADMIN]:
-                    attrs['zone'] = caller_zone
-                    zone = caller_zone
+                    attrs['zone'] = canonical_caller_zone
+                    zone = canonical_caller_zone
             elif not is_self_edit:
                 # Updating another user: cannot transfer across zones or remove zone
                 if 'zone' in attrs:
-                    new_zone = (attrs['zone'] or '').strip()
-                    if new_zone and new_zone.lower() != caller_zone.lower():
+                    new_zone = normalize_zone((attrs['zone'] or '').strip())
+                    if new_zone and new_zone.lower() != canonical_caller_zone.lower():
                         errors['zone'] = [f"Cannot transfer accounts to another zone ('{new_zone}')."]
                     elif not new_zone:
                         errors['zone'] = ['Cannot remove zone jurisdiction from user account.']
                     else:
-                        attrs['zone'] = caller_zone
+                        attrs['zone'] = canonical_caller_zone
 
             # Police Station scope validation: police station must belong to caller's zone
             if police_station and PoliceStationBoundary.objects.exists():
                 ps_obj = PoliceStationBoundary.objects.filter(ps_name__iexact=police_station).first()
-                if ps_obj and ps_obj.zone.strip().lower() != caller_zone.lower():
+                if ps_obj and normalize_zone(ps_obj.zone).lower() != canonical_caller_zone.lower():
                     errors['police_station'] = [
-                        f"Selected police station '{ps_obj.ps_name}' belongs to '{ps_obj.zone}', "
-                        f"outside your assigned zone '{caller_zone}'."
+                        f"Selected police station '{ps_obj.ps_name}' belongs to '{normalize_zone(ps_obj.zone)}', "
+                        f"outside your assigned zone '{canonical_caller_zone}'."
                     ]
 
         # Station / Zone validations by role
@@ -312,10 +325,10 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
                 ps_obj = PoliceStationBoundary.objects.filter(ps_name__iexact=police_station).first()
                 if not ps_obj:
                     errors['police_station'] = [f"Police station '{police_station}' is not a recognized authoritative station."]
-                elif ps_obj.zone.lower() != zone.lower():
-                    errors['police_station'] = [f"Selected police station '{ps_obj.ps_name}' does not belong to '{zone}' (belongs to '{ps_obj.zone}')."]
+                elif normalize_zone(ps_obj.zone).lower() != normalize_zone(zone).lower():
+                    errors['police_station'] = [f"Selected police station '{ps_obj.ps_name}' does not belong to '{normalize_zone(zone)}' (belongs to '{normalize_zone(ps_obj.zone)}')."]
                 else:
-                    attrs['zone'] = ps_obj.zone
+                    attrs['zone'] = normalize_zone(ps_obj.zone)
                     attrs['police_station'] = ps_obj.ps_name
                     if ps_obj.division and not attrs.get('division'):
                         attrs['division'] = ps_obj.division
@@ -330,9 +343,11 @@ class UserCreateUpdateSerializer(serializers.ModelSerializer):
                 else:
                     attrs['police_station'] = ps_obj.ps_name
                     if not zone:
-                        attrs['zone'] = ps_obj.zone
-                    elif ps_obj.zone.lower() != zone.lower():
-                        errors['police_station'] = [f"Selected police station '{ps_obj.ps_name}' does not belong to '{zone}'."]
+                        attrs['zone'] = normalize_zone(ps_obj.zone)
+                    elif normalize_zone(ps_obj.zone).lower() != normalize_zone(zone).lower():
+                        errors['police_station'] = [f"Selected police station '{ps_obj.ps_name}' does not belong to '{normalize_zone(zone)}'."]
+                    else:
+                        attrs['zone'] = normalize_zone(ps_obj.zone)
 
         elif role == UserRole.ACP:
             division = attrs.get('division', self.instance.division if self.instance else '')
