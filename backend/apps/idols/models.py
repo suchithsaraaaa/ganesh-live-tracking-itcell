@@ -119,6 +119,8 @@ class Idol(models.Model):
         indexes = [
             models.Index(fields=['zone', 'police_station']),
             models.Index(fields=['procession_state', 'status']),
+            models.Index(fields=['immersion_date']),
+            models.Index(fields=['immersion_date', 'procession_state']),
         ]
 
     @property

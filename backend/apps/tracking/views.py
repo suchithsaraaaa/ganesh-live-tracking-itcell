@@ -168,7 +168,11 @@ class IngestLocationView(APIView):
         serializer.is_valid(raise_exception=True)
 
         data = serializer.validated_data
-        session = get_object_or_404(TrackingSession, id=data['session_id'], status=TrackingSessionStatus.ACTIVE)
+        session = get_object_or_404(
+            TrackingSession.objects.select_related('assignment__idol'),
+            id=data['session_id'],
+            status=TrackingSessionStatus.ACTIVE
+        )
 
         # Check for duplicate of initial start GPS point (only within first 15 seconds of session start)
         if session.started_at and abs((data['recorded_at'] - session.started_at).total_seconds()) <= 15:
@@ -233,9 +237,18 @@ class BatchIngestLocationView(APIView):
         points_data = serializer.validated_data['points']
         session = get_object_or_404(TrackingSession, id=session_id)
 
+        incoming_dts = []
+        for p in points_data:
+            rec_at_str = p.get('recorded_at')
+            if rec_at_str:
+                try:
+                    incoming_dts.append(timezone.datetime.fromisoformat(rec_at_str.replace('Z', '+00:00')))
+                except Exception:
+                    pass
+
         existing_timestamps = set(
-            LocationPoint.objects.filter(session=session).values_list('recorded_at', flat=True)
-        )
+            LocationPoint.objects.filter(session=session, recorded_at__in=incoming_dts).values_list('recorded_at', flat=True)
+        ) if incoming_dts else set()
         initial_point = LocationPoint.objects.filter(session=session).order_by('recorded_at').first()
 
         points_to_create = []

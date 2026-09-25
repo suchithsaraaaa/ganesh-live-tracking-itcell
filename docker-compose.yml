@@ -48,7 +48,7 @@ services:
     command: >
       sh -c "python manage.py migrate --noinput &&
              python manage.py collectstatic --noinput &&
-             gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --worker-class gthread --threads 8 --worker-tmp-dir /dev/shm --max-requests 1000 --max-requests-jitter 100 --keep-alive 5 --timeout 60"
+             gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 5 --worker-class gthread --threads 8 --worker-tmp-dir /dev/shm --max-requests 1000 --max-requests-jitter 100 --keep-alive 5 --timeout 60"
 
   nginx:
     image: nginx:1.25-alpine

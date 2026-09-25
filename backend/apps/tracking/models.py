@@ -42,6 +42,7 @@ class TrackingSession(models.Model):
         ordering = ['-started_at']
         indexes = [
             models.Index(fields=['assignment', 'status']),
+            models.Index(fields=['status', '-started_at']),
         ]
 
     def __str__(self):
