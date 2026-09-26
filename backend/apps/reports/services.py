@@ -18,6 +18,33 @@ from apps.idols.models import Idol
 from apps.assignments.models import Assignment
 from apps.tracking.models import TrackingSession, LocationPoint, IdolEvent
 from apps.geography.models import BoundaryEvent
+from apps.geography.services import bulk_get_cached_locations, get_bucket
+
+
+def format_ps_display(ps_name: str) -> str:
+    """
+    Formats the Police Station name for display, ensuring canonical 'PS' suffix.
+    Preserves 'Jurisdiction unavailable' and 'Boundary / Ambiguous' without alteration.
+    """
+    if not ps_name or ps_name in ['Jurisdiction unavailable', 'Boundary / Ambiguous', 'N/A']:
+        return ps_name or 'Jurisdiction unavailable'
+    cleaned = str(ps_name).strip()
+    if cleaned.upper().endswith('PS') or cleaned.upper().endswith('POLICE STATION'):
+        return cleaned
+    return f"{cleaned} PS"
+
+
+def format_location_cell(place_name: str, ps_name: str) -> str:
+    """
+    Renders official two-line location cell:
+    <Place Name>
+    PS: <Police Station>
+    Strictly suppresses raw coordinates from human-readable PDF.
+    """
+    place = (place_name or 'Location unavailable').strip()
+    ps = format_ps_display(ps_name)
+    color = '#475569' if ps != 'Jurisdiction unavailable' else '#64748B'
+    return f"<b>{place}</b><br/><font color='{color}'>PS: {ps}</font>"
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -260,13 +287,35 @@ def generate_idol_pdf_report(gpid, session_id=None, generated_by_user=None):
         speeds = [p.speed for p in points if p.speed is not None]
         max_speed = (max(speeds) * 3.6) if speeds else 0.0
 
+    # Collect all coordinates to perform a single batch cache lookup (ZERO external network requests)
+    all_coords = []
+    if total_pts > 0:
+        all_coords.append((points[0].latitude, points[0].longitude))
+        all_coords.append((points[-1].latitude, points[-1].longitude))
+        for p in points[1:-1]:
+            all_coords.append((p.latitude, p.longitude))
+    for ev in raw_events:
+        if ev.latitude and ev.longitude:
+            all_coords.append((ev.latitude, ev.longitude))
+    for be in BoundaryEvent.objects.filter(idol=idol):
+        if be.latitude and be.longitude:
+            all_coords.append((be.latitude, be.longitude))
+
+    loc_cache_map = bulk_get_cached_locations(all_coords)
+
     # Build chronological timeline items first to know timeline count
     timeline_items = []
 
     # A. Add operational events
     for ev in raw_events:
         source_label = 'Ground Staff Device' if ('Device' in str(ev.metadata)) else (ev.actor.username if ev.actor else 'Field Officer')
-        loc_str = f"{ev.latitude:.5f}, {ev.longitude:.5f}" if (ev.latitude and ev.longitude) else (f"{ev.zone} Zone" if ev.zone else idol.police_station)
+        if ev.latitude and ev.longitude:
+            b = get_bucket(ev.latitude, ev.longitude)
+            pl, ps, _, _ = loc_cache_map.get(b, ('Location unavailable', 'Jurisdiction unavailable', '', ''))
+            loc_str = format_location_cell(pl, ps)
+        else:
+            fallback_loc = f"{ev.zone} Zone" if ev.zone else idol.police_station
+            loc_str = f"<b>{fallback_loc}</b><br/><font color='#64748B'>PS: {format_ps_display(idol.police_station)}</font>"
         desc = ev.metadata.get('description') or ev.metadata.get('source') or f"{ev.get_event_type_display()} recorded"
         timeline_items.append({
             'time': ev.timestamp,
@@ -278,23 +327,29 @@ def generate_idol_pdf_report(gpid, session_id=None, generated_by_user=None):
 
     # B. Add Boundary Events
     for be in BoundaryEvent.objects.filter(idol=idol).select_related('police_station'):
+        b = get_bucket(be.latitude, be.longitude)
+        pl, ps, _, _ = loc_cache_map.get(b, ('Location unavailable', be.police_station.ps_name, '', ''))
+        if ps == 'Jurisdiction unavailable' and be.police_station:
+            ps = be.police_station.ps_name
         timeline_items.append({
             'time': be.timestamp,
             'event': f"PS Boundary {be.get_event_type_display()}",
             'source': 'PostGIS Boundary Geofence',
-            'location': f"{be.latitude:.5f}, {be.longitude:.5f}",
+            'location': format_location_cell(pl, ps),
             'details': f"Crossed into {be.police_station.ps_name} ({be.police_station.zone})",
         })
 
     # C. Add GPS Telemetry points (sample dense points chronologically)
     if total_pts > 0:
         # Start point
+        b_first = get_bucket(points[0].latitude, points[0].longitude)
+        pl_first, ps_first, _, _ = loc_cache_map.get(b_first, ('Location unavailable', 'Jurisdiction unavailable', '', ''))
         timeline_items.append({
             'time': points[0].recorded_at,
             'event': 'Initial GPS Telemetry',
             'source': 'Mobile GPS Service',
-            'location': f"{points[0].latitude:.5f}, {points[0].longitude:.5f}",
-            'details': f"Accuracy: {points[0].accuracy:.1f}m" if points[0].accuracy else "Start Coordinates Logged",
+            'location': format_location_cell(pl_first, ps_first),
+            'details': f"Accuracy: {points[0].accuracy:.1f}m" if points[0].accuracy else "Start Position Logged",
         })
 
         # Sample intermediate points (every ~10 minutes or distance jump)
@@ -304,11 +359,13 @@ def generate_idol_pdf_report(gpid, session_id=None, generated_by_user=None):
                 delta_mins = (pt.recorded_at - last_sampled_time).total_seconds() / 60.0
                 if delta_mins >= 12.0:
                     spd_kmh = (pt.speed * 3.6) if pt.speed is not None else 0.0
+                    b_pt = get_bucket(pt.latitude, pt.longitude)
+                    pl_pt, ps_pt, _, _ = loc_cache_map.get(b_pt, ('Location unavailable', 'Jurisdiction unavailable', '', ''))
                     timeline_items.append({
                         'time': pt.recorded_at,
                         'event': 'GPS Telemetry Breadcrumb',
                         'source': 'Mobile GPS Service',
-                        'location': f"{pt.latitude:.5f}, {pt.longitude:.5f}",
+                        'location': format_location_cell(pl_pt, ps_pt),
                         'details': f"Moving: {spd_kmh:.1f} km/h, Accuracy: {pt.accuracy or 'N/A'}m",
                     })
                     last_sampled_time = pt.recorded_at
@@ -317,12 +374,13 @@ def generate_idol_pdf_report(gpid, session_id=None, generated_by_user=None):
         if total_pts > 1:
             last_pt = points[-1]
             last_spd = (last_pt.speed * 3.6) if last_pt.speed is not None else 0.0
+            b_last = get_bucket(last_pt.latitude, last_pt.longitude)
+            pl_last, ps_last, _, _ = loc_cache_map.get(b_last, ('Location unavailable', 'Jurisdiction unavailable', '', ''))
             timeline_items.append({
                 'time': last_pt.recorded_at,
                 'event': 'Latest GPS Telemetry' if (session and session.status == 'ACTIVE') else 'Final GPS Position',
                 'source': 'Mobile GPS Service',
-
-                'location': f"{last_pt.latitude:.5f}, {last_pt.longitude:.5f}",
+                'location': format_location_cell(pl_last, ps_last),
                 'details': f"Speed: {last_spd:.1f} km/h, Accuracy: {last_pt.accuracy or 'N/A'}m",
             })
 
@@ -440,6 +498,12 @@ def generate_idol_pdf_report(gpid, session_id=None, generated_by_user=None):
         start_time = timezone.localtime(first_pt.recorded_at).strftime('%d-%b-%Y %I:%M:%S %p')
         last_time = timezone.localtime(last_pt.recorded_at).strftime('%d-%b-%Y %I:%M:%S %p')
 
+        start_b = get_bucket(first_pt.latitude, first_pt.longitude)
+        start_pl, start_ps, _, _ = loc_cache_map.get(start_b, ('Location unavailable', 'Jurisdiction unavailable', '', ''))
+
+        latest_b = get_bucket(last_pt.latitude, last_pt.longitude)
+        latest_pl, latest_ps, _, _ = loc_cache_map.get(latest_b, ('Location unavailable', 'Jurisdiction unavailable', '', ''))
+
         gps_data = [
             [
                 Paragraph("<b>Total Telemetry Points:</b>", body_style), Paragraph(str(total_pts), body_style),
@@ -454,8 +518,8 @@ def generate_idol_pdf_report(gpid, session_id=None, generated_by_user=None):
                 Paragraph("<b>Max Speed Recorded:</b>", body_style), Paragraph(f"{max_speed:.1f} km/h", body_style),
             ],
             [
-                Paragraph("<b>Start Coordinates:</b>", body_style), Paragraph(f"({first_pt.latitude:.5f}, {first_pt.longitude:.5f})", body_style),
-                Paragraph("<b>Latest Coordinates:</b>", body_style), Paragraph(f"({last_pt.latitude:.5f}, {last_pt.longitude:.5f})", body_style),
+                Paragraph("<b>Start Location:</b>", body_style), Paragraph(format_location_cell(start_pl, start_ps), body_style),
+                Paragraph("<b>Latest Location:</b>", body_style), Paragraph(format_location_cell(latest_pl, latest_ps), body_style),
             ]
         ]
         t_gps = Table(gps_data, colWidths=[1.3 * inch, 2.2 * inch, 1.4 * inch, 2.1 * inch])

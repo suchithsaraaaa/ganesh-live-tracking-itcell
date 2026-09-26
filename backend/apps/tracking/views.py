@@ -381,6 +381,13 @@ class StopTrackingView(APIView):
                     tracking_session=session
                 )
 
+        # Asynchronously precompute/enrich location buckets for fast official report generation
+        try:
+            from apps.geography.services import trigger_async_session_enrichment
+            trigger_async_session_enrichment(session.id)
+        except Exception as e:
+            logger.warning(f"Could not trigger async location enrichment for session {session.id}: {e}")
+
         return Response({
             'status': 'stopped',
             'session_id': session.id,
@@ -1072,6 +1079,13 @@ class ProcessionEventIngestView(APIView):
                     'source': 'Android Field Tracker',
                 }
             )
+
+        if session and mapped_type in [IdolEventType.IMMERSION_COMPLETED, IdolEventType.TRACKING_STOPPED, IdolEventType.VISARJAN_REACHED]:
+            try:
+                from apps.geography.services import trigger_async_session_enrichment
+                trigger_async_session_enrichment(session.id)
+            except Exception as e:
+                logger.warning(f"Could not trigger async location enrichment for session {session.id}: {e}")
 
         return Response({
             'status': 'recorded',

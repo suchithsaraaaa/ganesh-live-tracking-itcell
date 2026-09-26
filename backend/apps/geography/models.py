@@ -71,3 +71,33 @@ class BoundaryEvent(models.Model):
 
     def __str__(self):
         return f"{self.idol.gpid} {self.event_type} {self.police_station.ps_name} at {self.timestamp}"
+
+
+class GeocodingCache(models.Model):
+    """
+    Persistent normalized spatial cache for reverse-geocoded place names and local PS jurisdictions.
+    Coordinates are stored as 4-decimal place buckets (~11m resolution) to deduplicate nearby telemetry
+    fixes without transferring place names across streets or jurisdictional boundaries.
+    """
+    lat_bucket = models.DecimalField(max_digits=9, decimal_places=4, db_index=True)
+    lon_bucket = models.DecimalField(max_digits=9, decimal_places=4, db_index=True)
+    place_name = models.CharField(max_length=255)
+    police_station = models.CharField(max_length=150, default='Jurisdiction unavailable')
+    zone = models.CharField(max_length=100, blank=True)
+    division = models.CharField(max_length=100, blank=True)
+    raw_address = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Geocoding Cache'
+        verbose_name_plural = 'Geocoding Cache Entries'
+        constraints = [
+            models.UniqueConstraint(fields=['lat_bucket', 'lon_bucket'], name='unique_geocoding_lat_lon_bucket')
+        ]
+        indexes = [
+            models.Index(fields=['lat_bucket', 'lon_bucket']),
+        ]
+
+    def __str__(self):
+        return f"({self.lat_bucket}, {self.lon_bucket}) -> {self.place_name} [{self.police_station}]"

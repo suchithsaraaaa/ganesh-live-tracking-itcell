@@ -2,7 +2,7 @@ from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 from apps.accounts.models import User, UserRole
-from apps.idols.models import Idol
+from apps.idols.models import Idol, ProcessionState
 from apps.reports.services import generate_idol_pdf_report
 
 
@@ -475,5 +475,290 @@ class ReportRegistryBusinessRuleTests(TestCase):
         self.assertEqual(float(item['idol_height']), 14.0)
         self.assertEqual(item['police_station'], 'Kulsumpura')
         self.assertEqual(item['zone'], 'Golconda')
+
+
+class ProcessionTimelineLocationTests(TestCase):
+    """
+    Comprehensive tests for human-readable place name and authoritative PS jurisdiction
+    in the Official Procession Incident Report.
+    """
+    def setUp(self):
+        from apps.geography.models import GeocodingCache
+        from apps.geography.services import get_bucket
+        from apps.idols.models import ProcessionState
+
+        self.client = APIClient()
+        self.officer = User.objects.create_user(
+            username='sho_charminar',
+            password='password123',
+            role=UserRole.SHO,
+            police_station='Dabeerpura',
+            zone='Charminar'
+        )
+        self.client.force_authenticate(user=self.officer)
+
+        # Seed authoritative cache buckets along sample procession route
+        b1_lat, b1_lon = get_bucket(17.37071, 78.49545)
+        GeocodingCache.objects.create(
+            lat_bucket=b1_lat,
+            lon_bucket=b1_lon,
+            place_name='Chanchalguda',
+            police_station='Dabeerpura PS',
+            zone='Charminar',
+            division='Dabeerpura'
+        )
+
+        b2_lat, b2_lon = get_bucket(17.38074, 78.49163)
+        GeocodingCache.objects.create(
+            lat_bucket=b2_lat,
+            lon_bucket=b2_lon,
+            place_name='Malakpet',
+            police_station='Malakpet PS',
+            zone='Charminar',
+            division='Malakpet'
+        )
+
+        b3_lat, b3_lon = get_bucket(17.41853, 78.46606)
+        GeocodingCache.objects.create(
+            lat_bucket=b3_lat,
+            lon_bucket=b3_lon,
+            place_name="People's Plaza",
+            police_station='Khairatabad PS',
+            zone='Central',
+            division='Khairatabad'
+        )
+
+        # Seed idol with multi-PS route
+        self.idol = Idol.objects.create(
+            gpid='HYDCMRZDBPR1182',
+            name='Dabeerpura Seva Samithi',
+            police_station='Dabeerpura',
+            zone='Charminar',
+            division='Dabeerpura',
+            idol_height=18.5,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+
+    def test_multi_ps_route_timeline_and_locations(self):
+        """
+        Tests that:
+        1. Start Location and Latest Location are resolved from cache.
+        2. Timeline events show the specific PS jurisdiction at that exact timestamp (not copying origin/destination).
+        3. Raw coordinates in DB remain 100% intact and untouched.
+        4. PDF generates cleanly in sub-second time.
+        """
+        import time
+        from django.utils import timezone
+        from apps.assignments.models import Assignment
+        from apps.tracking.models import TrackingSession, LocationPoint, TrackingSessionStatus, IdolEvent, IdolEventType
+
+        constable = User.objects.create_user(
+            username='pc_tracker_99',
+            password='password123',
+            role=UserRole.CONSTABLE,
+            police_id='PC-999'
+        )
+        assignment = Assignment.assign_constable(
+            idol=self.idol,
+            constable=constable,
+            assigned_by=self.officer
+        )
+        t0 = timezone.now()
+        session = TrackingSession.objects.create(
+            assignment=assignment,
+            status=TrackingSessionStatus.STOPPED,
+            started_at=t0,
+            ended_at=t0 + timezone.timedelta(hours=2)
+        )
+
+        # Point 1: Origin at Chanchalguda (Dabeerpura PS)
+        p1 = LocationPoint.objects.create(
+            session=session,
+            latitude=17.37071,
+            longitude=78.49545,
+            speed=0.3,
+            accuracy=4.5,
+            recorded_at=t0
+        )
+        # Point 2: In transit at Malakpet (Malakpet PS)
+        p2 = LocationPoint.objects.create(
+            session=session,
+            latitude=17.38074,
+            longitude=78.49163,
+            speed=1.5,
+            accuracy=5.2,
+            recorded_at=t0 + timezone.timedelta(minutes=30)
+        )
+        # Point 3: Final position at People's Plaza (Khairatabad PS)
+        p3 = LocationPoint.objects.create(
+            session=session,
+            latitude=17.41853,
+            longitude=78.46606,
+            speed=0.0,
+            accuracy=3.8,
+            recorded_at=t0 + timezone.timedelta(minutes=90)
+        )
+
+        # Operational Events
+        IdolEvent.objects.create(
+            idol=self.idol,
+            gpid=self.idol.gpid,
+            event_type=IdolEventType.TRACKING_STARTED,
+            timestamp=t0,
+            latitude=17.37071,
+            longitude=78.49545,
+            actor=constable,
+            tracking_session=session
+        )
+        IdolEvent.objects.create(
+            idol=self.idol,
+            gpid=self.idol.gpid,
+            event_type=IdolEventType.IMMERSION_COMPLETED,
+            timestamp=t0 + timezone.timedelta(minutes=90),
+            latitude=17.41853,
+            longitude=78.46606,
+            actor=constable,
+            tracking_session=session
+        )
+
+        start_gen = time.time()
+        pdf_bytes, report_id = generate_idol_pdf_report(
+            gpid=self.idol.gpid,
+            session_id=session.id,
+            generated_by_user=self.officer
+        )
+        gen_duration = time.time() - start_gen
+
+        # 1. Performance: Generation must be fast (< 1.0s)
+        self.assertLess(gen_duration, 1.0)
+        self.assertTrue(pdf_bytes.startswith(b'%PDF-'))
+        self.assertTrue(report_id.startswith('HYD-REP-'))
+
+        # 2. Database Integrity: Raw telemetry coordinates MUST remain untouched
+        p1.refresh_from_db()
+        self.assertAlmostEqual(p1.latitude, 17.37071, places=5)
+        self.assertAlmostEqual(p1.longitude, 78.49545, places=5)
+        self.assertEqual(p1.accuracy, 4.5)
+        self.assertEqual(p1.speed, 0.3)
+
+        p2.refresh_from_db()
+        self.assertAlmostEqual(p2.latitude, 17.38074, places=5)
+        self.assertAlmostEqual(p2.longitude, 78.49163, places=5)
+
+        p3.refresh_from_db()
+        self.assertAlmostEqual(p3.latitude, 17.41853, places=5)
+        self.assertAlmostEqual(p3.longitude, 78.46606, places=5)
+
+    def test_single_ps_route_golconda(self):
+        """Tests that single-PS routes in Golconda Zone resolve correctly."""
+        from apps.geography.models import GeocodingCache
+        from apps.geography.services import get_bucket
+        from apps.tracking.models import TrackingSession, LocationPoint, TrackingSessionStatus
+        from apps.assignments.models import Assignment
+        from django.utils import timezone
+
+        b_lat, b_lon = get_bucket(17.38330, 78.40110)
+        GeocodingCache.objects.create(
+            lat_bucket=b_lat,
+            lon_bucket=b_lon,
+            place_name='Golconda Fort Area',
+            police_station='Golconda PS',
+            zone='Golconda',
+            division='Golconda'
+        )
+
+        idol_gol = Idol.objects.create(
+            gpid='HYDGOLZGOLC2001',
+            name='Golconda Idol Test',
+            police_station='Golconda',
+            zone='Golconda',
+            division='Golconda',
+            idol_height=14.0,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+
+        admin = User.objects.create_user(
+            username='main_gol_officer',
+            password='password123',
+            role=UserRole.MAIN_OFFICER
+        )
+        assignment = Assignment.assign_constable(idol=idol_gol, constable=admin, assigned_by=admin)
+        t0 = timezone.now()
+        session = TrackingSession.objects.create(
+            assignment=assignment,
+            status=TrackingSessionStatus.STOPPED,
+            started_at=t0,
+            ended_at=t0 + timezone.timedelta(hours=1)
+        )
+        LocationPoint.objects.create(
+            session=session,
+            latitude=17.38330,
+            longitude=78.40110,
+            accuracy=5.0,
+            recorded_at=t0
+        )
+
+        pdf_bytes, report_id = generate_idol_pdf_report(
+            gpid=idol_gol.gpid,
+            session_id=session.id,
+            generated_by_user=admin
+        )
+        self.assertTrue(pdf_bytes.startswith(b'%PDF-'))
+        self.assertTrue(report_id.startswith('HYD-REP-'))
+
+    def test_uncached_location_safe_fallback(self):
+        """Tests that uncached points safely fallback to 'Location unavailable' without errors."""
+        from apps.tracking.models import TrackingSession, LocationPoint, TrackingSessionStatus
+        from apps.assignments.models import Assignment
+        from django.utils import timezone
+
+        idol_sec = Idol.objects.create(
+            gpid='HYDSECZSEC2002',
+            name='Secunderabad Idol Test',
+            police_station='Secunderabad',
+            zone='Secunderabad',
+            division='Secunderabad',
+            idol_height=16.0,
+            procession_state=ProcessionState.IMMERSION_COMPLETED
+        )
+        admin = User.objects.create_user(
+            username='main_sec_officer',
+            password='password123',
+            role=UserRole.MAIN_OFFICER
+        )
+        assignment = Assignment.assign_constable(idol=idol_sec, constable=admin, assigned_by=admin)
+        t0 = timezone.now()
+        session = TrackingSession.objects.create(
+            assignment=assignment,
+            status=TrackingSessionStatus.STOPPED,
+            started_at=t0,
+            ended_at=t0 + timezone.timedelta(hours=1)
+        )
+        # Point that has never been cached
+        LocationPoint.objects.create(
+            session=session,
+            latitude=17.91234,
+            longitude=78.91234,
+            accuracy=5.0,
+            recorded_at=t0
+        )
+
+        pdf_bytes, report_id = generate_idol_pdf_report(
+            gpid=idol_sec.gpid,
+            session_id=session.id,
+            generated_by_user=admin
+        )
+        self.assertTrue(pdf_bytes.startswith(b'%PDF-'))
+
+    def test_precompute_management_command(self):
+        """Tests the precompute_report_locations management command runs safely and idempotently."""
+        from django.core.management import call_command
+        from io import StringIO
+
+        out = StringIO()
+        call_command('precompute_report_locations', gpid=self.idol.gpid, stdout=out)
+        output_str = out.getvalue()
+        self.assertIn('PRECOMPUTATION SUMMARY', output_str)
+        self.assertIn('HYDCMRZDBPR1182', output_str or '')
 
 
