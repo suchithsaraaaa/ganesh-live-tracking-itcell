@@ -19,7 +19,7 @@ class PoliceStationBoundary(models.Model):
     starting_gpid_number = models.IntegerField(null=True, blank=True)
 
     if getattr(settings, 'USE_POSTGIS', False):
-        boundary = gis_models.PolygonField(srid=4326, null=True, blank=True)
+        boundary = gis_models.GeometryField(srid=4326, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
