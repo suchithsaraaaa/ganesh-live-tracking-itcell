@@ -154,9 +154,38 @@ def extract_place_name(data: dict) -> str:
     return 'Location unavailable'
 
 
+def reverse_geocode_photon(lat: float, lon: float) -> Tuple[str, dict]:
+    """
+    Fast, reliable reverse geocoding fallback using Photon (OSM-based).
+    Returns (place_name, properties_dict).
+    """
+    try:
+        url = f"https://photon.komoot.io/reverse?lat={float(lat):.5f}&lon={float(lon):.5f}"
+        req = urllib.request.Request(url, headers={'User-Agent': NOMINATIM_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            features = data.get('features', [])
+            if features:
+                props = features[0].get('properties', {})
+                name = props.get('name') or props.get('street')
+                locality = props.get('locality') or props.get('district') or props.get('city')
+                if name and locality and name.lower() not in locality.lower():
+                    place_name = f"{name}, {locality}"
+                elif name:
+                    place_name = name
+                elif locality:
+                    place_name = locality
+                else:
+                    place_name = 'Location unavailable'
+                return (place_name, props)
+    except Exception as e:
+        logger.warning(f"Photon reverse geocode error for ({lat}, {lon}): {e}")
+    return ('Location unavailable', {})
+
+
 def reverse_geocode_nominatim(lat: float, lon: float, delay_sec: float = 1.1) -> Tuple[str, dict]:
     """
-    Polite, rate-limited reverse geocoding via OpenStreetMap Nominatim.
+    Polite, rate-limited reverse geocoding via OpenStreetMap Nominatim with automatic Photon fallback.
     Thread-safe and adheres to 1 request/second policy.
     Returns (place_name, raw_address_dict).
     """
@@ -182,10 +211,16 @@ def reverse_geocode_nominatim(lat: float, lon: float, delay_sec: float = 1.1) ->
                 data = json.loads(resp.read().decode('utf-8'))
                 if isinstance(data, dict):
                     place_name = extract_place_name(data)
-                    return (place_name, data.get('address', {}))
+                    if place_name != 'Location unavailable':
+                        return (place_name, data.get('address', {}))
         except Exception as e:
             _last_nominatim_call = time.time()
             logger.warning(f"Reverse geocode error for ({lat}, {lon}): {e}")
+
+    # Fallback to Photon when Nominatim is rate-limited (429), unavailable, or returns unindexed
+    photon_place, photon_props = reverse_geocode_photon(lat, lon)
+    if photon_place != 'Location unavailable':
+        return (photon_place, photon_props)
 
     return ('Location unavailable', {})
 
@@ -201,7 +236,7 @@ def get_or_create_location_enrichment(lat: float, lon: float, allow_network: boo
     - NEVER triggers external HTTP geocoder during report download!
 
     When allow_network=True (background enrichment / management command):
-    - If uncached: queries PostGIS + Nominatim and saves to GeocodingCache.
+    - If uncached: queries PostGIS + Nominatim/Photon and saves to GeocodingCache.
     """
     if not lat or not lon:
         return ('Location unavailable', 'Jurisdiction unavailable', '', '')
@@ -211,11 +246,19 @@ def get_or_create_location_enrichment(lat: float, lon: float, allow_network: boo
     # 1. Check local persistent cache
     cache_entry = GeocodingCache.objects.filter(lat_bucket=lat_b, lon_bucket=lon_b).first()
     if cache_entry:
+        ps_name = cache_entry.police_station
+        zone = cache_entry.zone
+        division = cache_entry.division
+        # Self-healing: if cached before boundaries were loaded, re-resolve via local PostGIS PIP
+        if ps_name == 'Jurisdiction unavailable':
+            res_ps, res_zone, res_div = resolve_ps_jurisdiction(lat, lon)
+            if res_ps != 'Jurisdiction unavailable':
+                ps_name, zone, division = res_ps, res_zone, res_div
         return (
             cache_entry.place_name,
-            cache_entry.police_station,
-            cache_entry.zone,
-            cache_entry.division
+            ps_name,
+            zone,
+            division
         )
 
     # 2. Local PS jurisdiction lookup (always fast, local PostGIS query)
@@ -276,10 +319,17 @@ def bulk_get_cached_locations(coords: List[Tuple[float, float]]) -> Dict[Tuple[D
         q_filter |= Q(lat_bucket=lat_b, lon_bucket=lon_b)
 
     entries = GeocodingCache.objects.filter(q_filter)
-    result = {
-        (e.lat_bucket, e.lon_bucket): (e.place_name, e.police_station, e.zone, e.division)
-        for e in entries
-    }
+    result = {}
+    for e in entries:
+        ps_name = e.police_station
+        zone = e.zone
+        division = e.division
+        # Self-healing: if cached before boundaries were loaded, re-resolve via local PostGIS PIP
+        if ps_name == 'Jurisdiction unavailable':
+            res_ps, res_zone, res_div = resolve_ps_jurisdiction(float(e.lat_bucket), float(e.lon_bucket))
+            if res_ps != 'Jurisdiction unavailable':
+                ps_name, zone, division = res_ps, res_zone, res_div
+        result[(e.lat_bucket, e.lon_bucket)] = (e.place_name, ps_name, zone, division)
 
     # For any bucket missing from cache, evaluate local PostGIS without network
     missing_buckets = buckets - set(result.keys())

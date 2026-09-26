@@ -40,11 +40,20 @@ def format_location_cell(place_name: str, ps_name: str) -> str:
     <Place Name>
     PS: <Police Station>
     Strictly suppresses raw coordinates from human-readable PDF.
+    Gracefully formats jurisdictional area when granular street name is unindexed.
     """
-    place = (place_name or 'Location unavailable').strip()
+    place = (place_name or '').strip()
     ps = format_ps_display(ps_name)
     color = '#475569' if ps != 'Jurisdiction unavailable' else '#64748B'
-    return f"<b>{place}</b><br/><font color='{color}'>PS: {ps}</font>"
+
+    if place and place not in ['Location unavailable', 'Jurisdiction unavailable']:
+        return f"<b>{place}</b><br/><font color='{color}'>PS: {ps}</font>"
+
+    if ps and ps != 'Jurisdiction unavailable':
+        clean_ps = ps.replace(' PS', '').replace(' Police Station', '').strip()
+        return f"<b>{clean_ps} Area</b><br/><font color='{color}'>PS: {ps}</font>"
+
+    return f"<b>Telangana / HYD Area</b><br/><font color='{color}'>PS: Jurisdiction unavailable</font>"
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
